@@ -83,7 +83,7 @@ Tutti i moduli comunicano con l'ESP32 tramite i bus standard I2C e SPI o pin dig
 
 #### Schema Topografico
 
-![Schema Topografico](docs/images/schema-topografico.png)
+![Schema Topografico](Media/schemaTopografico.png)
 
 
 #### Interfaccia OLED
@@ -211,7 +211,7 @@ All modules communicate with the ESP32 via the standard I2C and SPI buses, or de
 
 #### Topographic Diagram
 
-![Topographic Diagram](docs/images/schema-topografico.png)
+![Topographic Diagram](Media/schemaTopografico.png)
 
 
 #### OLED Interface
