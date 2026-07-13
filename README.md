@@ -56,8 +56,8 @@ Tutti i moduli comunicano con l'ESP32 tramite i bus standard I2C e SPI o pin dig
 | Lettore MicroSD | SPI (MISO) | GPIO 19 | Master In Slave Out |
 | Lettore MicroSD | SPI (SCK) | GPIO 18 | Serial Clock |
 | Pulsante SU | GPIO Digitale | GPIO 13 | Configurato come INPUT_PULLUP |
-| Pulsante GIÙ | GPIO Digitale | GPIO 12 | Configurato come INPUT_PULLUP |
-| Pulsante OK | GPIO Digitale | GPIO 25 | Configurato come INPUT_PULLUP |
+| Pulsante GIÙ | GPIO Digitale | GPIO 25 | Configurato come INPUT_PULLUP |
+| Pulsante OK | GPIO Digitale | GPIO 14 | Configurato come INPUT_PULLUP |
 | Pulsante LOG | GPIO Digitale | GPIO 27 | Configurato come INPUT_PULLUP |
 
 <a id="it-bom"></a>
@@ -184,8 +184,8 @@ All modules communicate with the ESP32 via the standard I2C and SPI buses, or de
 | MicroSD Reader | SPI (MISO) | GPIO 19 | Master In Slave Out |
 | MicroSD Reader | SPI (SCK) | GPIO 18 | Serial Clock |
 | UP Button | Digital GPIO | GPIO 13 | Configured as INPUT_PULLUP |
-| DOWN Button | Digital GPIO | GPIO 12 | Configured as INPUT_PULLUP |
-| OK Button | Digital GPIO | GPIO 25 | Configured as INPUT_PULLUP |
+| DOWN Button | Digital GPIO | GPIO 25 | Configured as INPUT_PULLUP |
+| OK Button | Digital GPIO | GPIO 14 | Configured as INPUT_PULLUP |
 | LOG Button | Digital GPIO | GPIO 27 | Configured as INPUT_PULLUP |
 
 <a id="en-bom"></a>
