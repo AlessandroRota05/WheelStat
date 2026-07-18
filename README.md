@@ -12,7 +12,8 @@
 
 WheelStat è un sistema di telemetria open source basato su **ESP32**, progettato per moto. Grazie all'integrazione di un sensore IMU (**Bosch BNO055**), il sistema monitora in tempo reale l'angolo di piega, l'angolo di impennata e le forze G dinamiche, calcolando contemporaneamente un indice di rischio di perdita di grip basato sui parametri ambientali rilevati da un sensore **DHT22**.
 
-I dati vengono visualizzati live su un modulo display OLED 0.96" con 4 pulsanti integrati tramite un'interfaccia a 7 schermate e salvati automaticamente nella memoria flash interna dell'ESP32 in formato CSV: a fine giro si scaricano via WiFi direttamente dal telefono per l'analisi post-sessione.
+I dati vengono visualizzati live su una pagina web o un modulo display OLED 0.96" con 4 pulsanti integrati tramite un'interfaccia a 7 schermate e salvati automaticamente nella memoria flash interna dell'ESP32 in formato CSV: a fine giro si scaricano via WiFi direttamente dal telefono per l'analisi post-sessione.
+
 
 ### 📑 Indice
 
