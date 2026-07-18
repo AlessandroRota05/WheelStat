@@ -93,7 +93,6 @@ Tutti i moduli comunicano con l'ESP32 tramite i bus standard I2C e SPI o pin dig
 ![Interfaccia OLED](Media/interfacciaOled1.png)
 ![Interfaccia OLED](Media/interfacciaOled2.png)
 ![Interfaccia OLED](Media/InterfacciaOled3.png)
-![Interfaccia OLED](Media/InterfacciaOled4.png)
 ![Interfaccia Web](Media/web.png)
 
 <a id="it-come-funziona"></a>
@@ -232,7 +231,6 @@ All modules communicate with the ESP32 via the standard I2C and SPI buses, or de
 ![OLED Interface](Media/interfacciaOled1.png)
 ![OLED Interface](Media/interfacciaOled2.png)
 ![OLED Interface](Media/InterfacciaOled3.png)
-![OLED Interface](Media/InterfacciaOled4.png)
 ![Interfaccia Web](Media/web.png)
 
 <a id="en-how-it-works"></a>
