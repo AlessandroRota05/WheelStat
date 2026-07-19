@@ -70,7 +70,6 @@ Tutti i moduli comunicano con l'ESP32 tramite il bus standard I2C o pin digitali
 | ESP32 DevKit V1 (30/38 pin) | 1 | Microcontrollore principale |
 | Bosch BNO055 (breakout) | 1 | IMU a 9 assi, sensor fusion hardware |
 | DHT22  | 1 | Sensore temperatura/umidità |
-| Resistenza 4.7–10 kΩ | 1 | Pull-up sulla linea dati del DHT22 |
 | Display OLED SSD1306 (I2C, 128x64) | 1 | Interfaccia grafica |
 | Pulsanti tattili | 4 | SU / GIÙ / OK / LOG (integrati nel modulo display)|
 | Cavi jumper / dupont | q.b. | Collegamenti |
@@ -211,7 +210,6 @@ All modules communicate with the ESP32 via the standard I2C bus or dedicated dig
 | ESP32 DevKit V1 (30/38 pin) | 1 | Main microcontroller |
 | Bosch BNO055 (breakout) | 1 | 9-axis IMU, hardware sensor fusion |
 | DHT22 | 1 | Temperature/humidity sensor |
-| 4.7–10 kΩ resistor | 1 | Pull-up on the DHT22 data line |
 | OLED SSD1306 Display (I2C, 128x64) | 1 | Graphic interface |
 | Tactile buttons | 4 | UP / DOWN / OK / LOG (integrated in the display module) |
 | Jumper / dupont wires | as needed | Connections |
