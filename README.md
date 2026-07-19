@@ -48,7 +48,7 @@ Il centro del progetto è un microcontrollore **ESP32 DevKit V1** (30 o 38 pin).
 
 #### Schema di Cablaggio (Pinout)
 
-Tutti i moduli comunicano con l'ESP32 tramite i bus standard I2C e SPI o pin digitali dedicati:
+Tutti i moduli comunicano con l'ESP32 tramite il bus standard I2C o pin digitali dedicati:
 
 | Componente | Bus / Segnale | Pin ESP32 | Note |
 |---|---|---|---|
@@ -56,7 +56,7 @@ Tutti i moduli comunicano con l'ESP32 tramite i bus standard I2C e SPI o pin dig
 | OLED SSD1306 | I2C (SCL) | GPIO 22 | Condiviso con BNO055 |
 | Bosch BNO055 | I2C (SDA) | GPIO 21 | Indirizzo I2C standard: 0x28 |
 | Bosch BNO055 | I2C (SCL) | GPIO 22 | Indirizzo I2C standard: 0x28 |
-| DHT22 | GPIO Digitale | GPIO 4 | Linea dati singola |
+| DHT22 | GPIO Digitale | GPIO 4 | Linea dati singola, pull-up esterna 4.7–10 kΩ verso 3.3V |
 | Pulsante SU | GPIO Digitale | GPIO 13 | Configurato come INPUT_PULLUP |
 | Pulsante GIÙ | GPIO Digitale | GPIO 25 | Configurato come INPUT_PULLUP |
 | Pulsante OK | GPIO Digitale | GPIO 14 | Configurato come INPUT_PULLUP |
@@ -70,10 +70,11 @@ Tutti i moduli comunicano con l'ESP32 tramite i bus standard I2C e SPI o pin dig
 | ESP32 DevKit V1 (30/38 pin) | 1 | Microcontrollore principale |
 | Bosch BNO055 (breakout) | 1 | IMU a 9 assi, sensor fusion hardware |
 | DHT22  | 1 | Sensore temperatura/umidità |
+| Resistenza 4.7–10 kΩ | 1 | Pull-up sulla linea dati del DHT22 |
 | Display OLED SSD1306 (I2C, 128x64) | 1 | Interfaccia grafica |
 | Pulsanti tattili | 4 | SU / GIÙ / OK / LOG (integrati nel modulo display)|
 | Cavi jumper / dupont | q.b. | Collegamenti |
-| Alimentazione | 1 | alimentazione usb-c |
+| Alimentazione | 1 | Alimentazione USB-C |
 
 <a id="it-schemi"></a>
 ### Schemi e Immagini del Progetto
@@ -110,6 +111,8 @@ Per compilare correttamente il firmware su Arduino IDE assicurati di aver instal
 - `Adafruit GFX Library` (di Adafruit)
 - `DHT sensor library` (di Adafruit)
 - `Adafruit Unified Sensor` (richiesta come dipendenza comune)
+
+Le librerie `WiFi`, `WebServer`, `LittleFS` e `Wire` sono già incluse nel core ESP32 di Arduino: non serve installarle separatamente.
 
 <a id="it-csv"></a>
 ### Struttura dei Dati di Log (CSV)
@@ -151,7 +154,7 @@ Progettato e sviluppato da **Alessandro Rota** con il supporto indispensabile di
 
 WheelStat is an open source telemetry system based on **ESP32**, designed for motorcycles. Thanks to the integration of an IMU sensor (**Bosch BNO055**), the system monitors in real time the lean angle, wheelie angle and dynamic G-forces, while simultaneously calculating a grip-loss risk index based on the environmental parameters detected by a **DHT22** sensor.
 
-Data is displayed live on a 0.96" OLED display module with 4 integrated buttons through a 7-screen interface, and is automatically saved to the ESP32's internal flash memory in CSV format: at the end of the ride, files can be downloaded via WiFi directly from your phone for post-session analysis.
+Data is displayed live on a web page or on a 0.96" OLED display module with 4 integrated buttons through a 7-screen interface, and is automatically saved to the ESP32's internal flash memory in CSV format: at the end of the ride, files can be downloaded via WiFi directly from your phone for post-session analysis.
 
 ### 📑 Table of Contents
 
@@ -186,7 +189,7 @@ The core of the project is an **ESP32 DevKit V1** microcontroller (30 or 38 pin)
 
 #### Wiring Diagram (Pinout)
 
-All modules communicate with the ESP32 via the standard I2C and SPI buses, or dedicated digital pins:
+All modules communicate with the ESP32 via the standard I2C bus or dedicated digital pins:
 
 | Component | Bus / Signal | ESP32 Pin | Notes |
 |---|---|---|---|
@@ -194,7 +197,7 @@ All modules communicate with the ESP32 via the standard I2C and SPI buses, or de
 | OLED SSD1306 | I2C (SCL) | GPIO 22 | Shared with BNO055 |
 | Bosch BNO055 | I2C (SDA) | GPIO 21 | Standard I2C address: 0x28 |
 | Bosch BNO055 | I2C (SCL) | GPIO 22 | Standard I2C address: 0x28 |
-| DHT22 | Digital GPIO | GPIO 4 | Single data line |
+| DHT22 | Digital GPIO | GPIO 4 | Single data line, external 4.7–10 kΩ pull-up to 3.3V |
 | UP Button | Digital GPIO | GPIO 13 | Configured as INPUT_PULLUP |
 | DOWN Button | Digital GPIO | GPIO 25 | Configured as INPUT_PULLUP |
 | OK Button | Digital GPIO | GPIO 14 | Configured as INPUT_PULLUP |
@@ -208,6 +211,7 @@ All modules communicate with the ESP32 via the standard I2C and SPI buses, or de
 | ESP32 DevKit V1 (30/38 pin) | 1 | Main microcontroller |
 | Bosch BNO055 (breakout) | 1 | 9-axis IMU, hardware sensor fusion |
 | DHT22 | 1 | Temperature/humidity sensor |
+| 4.7–10 kΩ resistor | 1 | Pull-up on the DHT22 data line |
 | OLED SSD1306 Display (I2C, 128x64) | 1 | Graphic interface |
 | Tactile buttons | 4 | UP / DOWN / OK / LOG (integrated in the display module) |
 | Jumper / dupont wires | as needed | Connections |
@@ -231,7 +235,7 @@ All modules communicate with the ESP32 via the standard I2C and SPI buses, or de
 ![OLED Interface](Media/interfacciaOled1.png)
 ![OLED Interface](Media/interfacciaOled2.png)
 ![OLED Interface](Media/InterfacciaOled3.png)
-![Interfaccia Web](Media/web.png)
+![Web Interface](Media/web.png)
 
 <a id="en-how-it-works"></a>
 ### How Grip Risk Works
@@ -248,6 +252,8 @@ To correctly compile the firmware in Arduino IDE make sure you have installed th
 - `Adafruit GFX Library` (by Adafruit)
 - `DHT sensor library` (by Adafruit)
 - `Adafruit Unified Sensor` (required as a common dependency)
+
+The `WiFi`, `WebServer`, `LittleFS` and `Wire` libraries are already bundled with the Arduino ESP32 core: no separate installation is needed.
 
 <a id="en-csv"></a>
 ### Log Data Structure (CSV)
