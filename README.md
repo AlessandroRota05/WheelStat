@@ -56,7 +56,7 @@ Tutti i moduli comunicano con l'ESP32 tramite il bus standard I2C o pin digitali
 | OLED SSD1306 | I2C (SCL) | GPIO 22 | Condiviso con BNO055 |
 | Bosch BNO055 | I2C (SDA) | GPIO 21 | Indirizzo I2C standard: 0x28 |
 | Bosch BNO055 | I2C (SCL) | GPIO 22 | Indirizzo I2C standard: 0x28 |
-| DHT22 | GPIO Digitale | GPIO 4 | Linea dati singola, pull-up esterna 4.7–10 kΩ verso 3.3V |
+| DHT22 | GPIO Digitale | GPIO 4 | Linea dati singola |
 | Pulsante SU | GPIO Digitale | GPIO 13 | Configurato come INPUT_PULLUP |
 | Pulsante GIÙ | GPIO Digitale | GPIO 25 | Configurato come INPUT_PULLUP |
 | Pulsante OK | GPIO Digitale | GPIO 14 | Configurato come INPUT_PULLUP |
@@ -196,7 +196,7 @@ All modules communicate with the ESP32 via the standard I2C bus or dedicated dig
 | OLED SSD1306 | I2C (SCL) | GPIO 22 | Shared with BNO055 |
 | Bosch BNO055 | I2C (SDA) | GPIO 21 | Standard I2C address: 0x28 |
 | Bosch BNO055 | I2C (SCL) | GPIO 22 | Standard I2C address: 0x28 |
-| DHT22 | Digital GPIO | GPIO 4 | Single data line, external 4.7–10 kΩ pull-up to 3.3V |
+| DHT22 | Digital GPIO | GPIO 4 | Single data line |
 | UP Button | Digital GPIO | GPIO 13 | Configured as INPUT_PULLUP |
 | DOWN Button | Digital GPIO | GPIO 25 | Configured as INPUT_PULLUP |
 | OK Button | Digital GPIO | GPIO 14 | Configured as INPUT_PULLUP |
