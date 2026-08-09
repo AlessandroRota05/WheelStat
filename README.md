@@ -163,6 +163,7 @@ Dalla pagina **WiFi** (tasto OK) l'ESP32 alza un access point. Collega il telefo
 | **Tracciati** (`/tracciati`) | Classifica giri, tracciato attivo, record, settori, forma |
 | **Confronta** (`/confronta`) | Due sessioni a confronto, giro per giro |
 
+![Interfacciaweb](Media/interfacciaWeb.png)
 Il download è bloccato durante la registrazione.
 
 <a id="it-file"></a>
