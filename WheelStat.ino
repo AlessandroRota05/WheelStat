@@ -1,90 +1,92 @@
 /*
   ===========================================================================
-  WheelStat   Alessandro Rota - Apache License 2.0 - v9.2
+  WheelStat - Alessandro Rota - Apache License 2.0 - v9.16
   ===========================================================================
+  Telemetria per moto su ESP32: angolo di piega, impennata/stoppie, forze
+  G, meteo e rischio grip, posizione e lap timing GPS. I dati si vedono in
+  tempo reale su OLED (10 pagine) e sul sito servito da un access point
+  WiFi, e si registrano in CSV sulla flash interna.
 
-  WIFI
-    Access point "WheelStat": dal telefono su http://192.168.4.1 si
-    scaricano (e cancellano) i CSV e si vede la telemetria live.
+  STRUTTURA
+    Config.h            scelta dei driver e configurazione hardware
+    WheelStat.ino       questo file: il "motore". Sensori, filtro
+                        anti-buca, statistiche/eventi/rischio grip, lap
+                        timing, registrazione su flash, tracciati. Tutto
+                        cio' che non disegna niente.
+    PagineOled.ino      le pagine OLED e i loro helper di disegno
+    InterfacciaWeb.ino  il sito: CSS, pagina live, tracciati, CSV/GPX
+    src/driver/*.h           un file per categoria di componente (meteo,
+                        display, GPS, IMU): dentro, un blocco #if per
+                        chip. Ne viene compilato uno solo per categoria.
 
-  STORICO VERSIONI
-  v6.3  rimappatura hardware BNO055 per il montaggio reale
-  v6.5  statistica stoppie
-  v6.6  verso impennata/stoppie corretto + zona morta 
-  v6.7  contatore eventi di sessione con soglie
-  v7.0  WiFi: download CSV e telemetria live con grafici dal telefono
-  v7.1  password nuova ritoccata interfaccia
-  v7.2  passati di commenti nuovi per sistemare il casino
-  v8.0  riscrittura organizzata
-  v8.1  calibrazione guidata all'avvio
-  v8.2  schermata di calibrazione ridisegnata
-  v8.3  interfaccia OLED uniformata: tutte le pagine live hanno titolo
-        centrato con riga di separazione alla stessa quota e dati su una
-        griglia  
-  v9.0  logging spostato dalla MicroSD alla memoria flash interna
-  v9.1  riepilogo di fine sessione riorganizzato
-  v9.2  revisione di robustezza, funzionalita' invariata: valori meteo
-        di partenza neutri (niente rischio 70% fittizio prima della
-        prima lettura del DHT22 o a sensore guasto)
+  Arduino concatena tutti i .ino della cartella in un unico programma, in
+  quest'ordine: prima il file principale, poi gli altri in ordine
+  alfabetico. Funzioni e variabili globali restano quindi visibili fra un
+  file e l'altro. Per compilare, i file devono stare tutti nella STESSA
+  cartella, chiamata esattamente "WheelStat".
+
+  DOVE GUARDARE
+    README.md                      montaggio, uso, pagine, sito, formato CSV
+    docs/DRIVER.md                 come funzionano i driver e come aggiungerne uno
+    docs/HARDWARE.md               componenti alternativi e trappole d'acquisto
+    docs/CHANGELOG.md              storico delle versioni
+  ===========================================================================
 */
 
 // ===========================================================================
 // 1. LIBRERIE
 // ===========================================================================
+// Le librerie dei COMPONENTI (IMU, meteo, display) non si includono qui:
+// le include il file del driver selezionato, che e' l'unico a sapere che
+// chip c'e' montato.
 
 #include <Wire.h>              // bus I2C
 #include <LittleFS.h>          // filesystem sulla flash interna
 #include <WiFi.h>              // wifi
 #include <WebServer.h>         // server HTTP
 #include <Adafruit_GFX.h>      // primitive grafiche
-#include <Adafruit_SSD1306.h>  // driver del pannello OLED
-#include <Adafruit_BNO055.h>   // driver dell'IMU
-#include <Adafruit_Sensor.h>   // libreria complementare
-#include <utility/imumaths.h>  // matematica
-#include "DHT.h"               // driver della temperatura
+#include <Adafruit_Sensor.h>   // tipo sensors_event_t, comune ai driver
+#include <TinyGPSPlus.h>       // parsing NMEA del modulo GPS
+// La libreria del sensore meteo NON si include qui: la include il file
+// del driver selezionato (src/driver/Meteo.h), che e'
+// l'unico posto del firmware a sapere che sensore c'e' montato.
+
+// Tutto cio' che cambia da un esemplare all'altro. Lo include solo questo
+// file: la concatenazione lo rende visibile anche agli altri due .ino.
+#include "Config.h"
+
+// I driver sono header e non .ino per un motivo pratico: solo i .ino
+// devono stare nella radice dello sketch, gli header possono stare in
+// sottocartelle - ed e' cosi' che stanno tutti insieme in src/driver/.
+//
+// L'ordine non conta: un driver puo' dipendere solo da Config.h,
+// altrimenti non e' piu' sostituibile davvero.
+#include "src/driver/Display.h"
+#include "src/driver/Gps.h"
+#include "src/driver/Imu.h"
+#include "src/driver/Meteo.h"
+
+// Unica fonte per la versione mostrata a schermo (splash OLED) e sul
+// monitor seriale: il commento in cima al file resta la cronologia
+// completa, questa costante e' solo "cosa sto guardando adesso".
+// Ricordarsi di aggiornarla insieme al numero in cima al file.
+const char FIRMWARE_VERSION[] = "v9.16";
 
 // ===========================================================================
-// 2. PIN E INDIRIZZI
+// 2. CONFIGURAZIONE DELL'HARDWARE -> Config.h
 // ===========================================================================
-
-// Pulsanti attivi bassi (premuto = LOW), pull-up interna dell'ESP32:
-// niente resistenze esterne, un capo al pin e l'altro a GND.
-const uint8_t PIN_BTN_SU  = 13;
-const uint8_t PIN_BTN_GIU = 25;  
-                                
-const uint8_t PIN_BTN_OK  = 14;
-const uint8_t PIN_BTN_LOG = 27;
-
-const uint8_t PIN_DHT     = 4;   
-const uint8_t PIN_I2C_SDA = 21;
-const uint8_t PIN_I2C_SCL = 22;
-
-const uint8_t  I2C_ADDR_OLED = 0x3C;
-const uint8_t  I2C_ADDR_BNO  = 0x28;    
-const uint32_t I2C_CLOCK_HZ  = 400000;  // alzato per diminuire imput lag
+// Pin, indirizzi I2C, dimensioni del display, assi dell'IMU, parametri
+// GPS e credenziali dell'AP stanno tutti in Config.h: sono le uniche cose
+// che cambiano montando componenti diversi.
+//
+// La sezione 3 qui sotto e' invece la taratura del COMPORTAMENTO (soglie,
+// filtri, temporizzazioni), che con l'hardware non cambia.
 
 // ===========================================================================
 // 3. CONFIGURAZIONE
 // ===========================================================================
 
 const float GRAVITA = 9.81f;  // per passare da m/s^2 a G
-
-//in base a come sono predisposti componenti, nel mio caso imu montata sottosopra
-const Adafruit_BNO055::adafruit_bno055_axis_remap_config_t REMAP_ASSI =
-    Adafruit_BNO055::REMAP_CONFIG_P5;
-const Adafruit_BNO055::adafruit_bno055_axis_remap_sign_t REMAP_SEGNI =
-    Adafruit_BNO055::REMAP_SIGN_P5;
-
-// Versi di rotazione e accelerazione:
-//  - inclina la scatola a destra      deve salire Piega Dx
-//  - spingi la scatola in avanti      long positivo, pallino in alto
-//  - spingi la scatola a sinistra     pallino a sinistra
-//  - alza il davanti (muso su)        deve salire Impennata, non Stoppie
-// Se un verso esce al contrario, inverti il segno corrispondente.
-const float SEGNO_PIEGA     =  1.0f;
-const float SEGNO_IMPENNATA = -1.0f;
-const float SEGNO_G_LONG    =  1.0f;
-const float SEGNO_G_LAT     = -1.0f;
 
 // --- Filtri -----------------------------------------------------------------
 // Filtro anti-buca: un valore conta per record ed eventi solo se il livello
@@ -108,7 +110,8 @@ const float RIDUZIONE_PIEGA_RISCHIO = 0.35f;  // gradi "persi" per ogni punto di
 
 // --- Temporizzazioni (ms) ----------------------------------------------------
 const unsigned long INTERVALLO_DISPLAY   = 100;    // 10 FPS
-const unsigned long INTERVALLO_METEO     = 2000;   // il DHT22 non regge di piu'
+// INTERVALLO_METEO sta in Config.h: non e' una scelta di prodotto ma il
+// limite fisico del sensore montato, e cambia col sensore
 const unsigned long INTERVALLO_SERIALE   = 5000;   // telemetria di debug
 const unsigned long INTERVALLO_LAMPEGGIO = 500;    // asterisco "* REC"
 const unsigned long INTERVALLO_LOG       = 60000;  // un record CSV al minuto
@@ -118,15 +121,93 @@ const unsigned long DURATA_SPLASH        = 1500;   // logo all'accensione
 const unsigned long PAUSA_LOOP           = 10;     // respiro per il watchdog
 const unsigned long RIEPILOGO_TIMEOUT    = 30000;  // uscita automatica dal riepilogo
 
-// --- Memoria e WiFi -----------------------------------------------------------
+// Quanto si ascolta la UART del GPS all'avvio prima di dichiarare il
+// modulo assente (vedi gpsAscoltaNMEA). Tarato sul caso piu' lento: un
+// modulo non-u-blox resta a 1 Hz di fabbrica, quindi 1500 ms garantiscono
+// una frase intera con margine. Sta qui e non in Config.h perche' copre
+// tutti e tre i moduli: non cambia montandone uno diverso.
+const unsigned long ATTESA_NMEA_BOOT     = 1500;
+
+// --- Memoria ------------------------------------------------------------------
 const int MAX_SESSIONI = 9999;  // tetto alla numerazione LOG_n.CSV
 
 // Sotto questa soglia di spazio libero la registrazione non parte
 const unsigned long MIN_SPAZIO_LIBERO = 32 * 1024UL;  // byte
 
-// Access point per il telefono
-const char WIFI_SSID[]     = "WheelStat";
-const char WIFI_PASSWORD[] = "30elode!";
+// (SSID/password dell'access point e parametri del GPS: Config.h)
+
+// --- Lap timing (traguardo GPS "volante") --------------------------------
+const float RAGGIO_TRAGUARDO_M       = 20.0f;    // metri: sotto, il passaggio e' "sulla linea"
+const unsigned long MIN_INTERVALLO_GIRO_MS = 15000UL;  // anti-doppio conteggio vicino alla linea
+const int   MAX_GIRI                 = 50;       // tetto ai giri per sessione (array in RAM)
+
+// --- Forma del tracciato e settori ----------------------------------------
+// La forma e' una sequenza di punti campionati durante un giro (vedi
+// rilevaGiro()), salvata nel file del tracciato quando quel giro batte
+// il record di sessione. Un punto al secondo (INTERVALLO_PUNTO_FORMA_MS)
+// e' piu' che sufficiente per riconoscere la forma di un circuito: non
+// serve la stessa risoluzione della traccia live sul sito.
+const int MAX_PUNTI_FORMA = 80;
+const unsigned long INTERVALLO_PUNTO_FORMA_MS = 1000UL;
+
+// I settori sono checkpoint GPS intermedi, oltre al traguardo, che
+// dividono il giro in altrettanti tratti cronometrati separatamente.
+// MAX_SETTORI e' il numero di checkpoint INTERMEDI (non conta il
+// traguardo): con 2 checkpoint si hanno fino a 3 settori per giro. Un
+// tracciato senza checkpoint (il caso comune, e il default per ogni
+// tracciato nuovo) ha semplicemente un giro come unico settore, esatto
+// come il lap timing gia' esistente.
+const int MAX_SETTORI = 2;
+
+// Tetto all'elenco sessioni di /confronta (elencaSessioni): generoso per
+// l'uso tipico, tiene comunque un limite fisso alla RAM usata dall'array.
+const int MAX_SESSIONI_ELENCO = 40;
+
+// Va dichiarata QUI, prima di qualunque funzione: l'IDE Arduino genera i
+// prototipi automatici in cima al file e non vedrebbe una struct definita
+// piu' in basso - la compilazione fallirebbe con "'Tracciato' has not
+// been declared". Solo la struct: il resto dello stato tracciati sta
+// nella sezione 5 con le altre globali.
+//
+// Dimensione approssimativa: ~720 byte per tracciato (soprattutto la
+// forma, 80 punti x 2 float x 4 byte). Con MAX_TRACCIATI=30 il tetto
+// massimo e' ~22 KB: trascurabile sul ~1.5 MB di LittleFS disponibile.
+struct Tracciato {
+  uint32_t magic;
+  char     nome[24];
+  double   traguardoLat;
+  double   traguardoLon;
+  uint32_t migliorGiroMs;  // record di sempre SU QUESTO TRACCIATO, 0 = nessuno
+
+  uint16_t numPuntiForma;              // 0 = forma non ancora registrata
+  float    formaLat[MAX_PUNTI_FORMA];
+  float    formaLon[MAX_PUNTI_FORMA];
+
+  uint8_t  numCheckpoint;              // 0..MAX_SETTORI, 0 = nessun settore
+  double   checkpointLat[MAX_SETTORI];
+  double   checkpointLon[MAX_SETTORI];
+};
+
+// Struct usata da leggiInfoSessione() come tipo di ritorno (sezione 13,
+// pagina web /confronta). Stesso motivo di Tracciato qui sopra: deve
+// stare prima di qualunque funzione, altrimenti l'IDE Arduino genera un
+// prototipo con un tipo ancora sconosciuto e la compilazione fallisce.
+struct InfoSessione {
+  bool          trovata;               // false se il file non ha un riepilogo valido
+  String        tracciato;             // nome del tracciato di quella sessione, o "libera"
+  int           numGiri;
+  unsigned long tempiGiro[MAX_GIRI];
+};
+
+// Riga sintetica di una sessione (nome file + tracciato + giri), usata
+// da elencaSessioni() per costruire l'elenco UNA sola volta e riusarlo
+// per entrambe le select di /confronta. Stesso motivo delle struct qui
+// sopra: dichiarata prima di qualunque funzione.
+struct VoceSessione {
+  String nome;
+  String tracciato;
+  int    numGiri;
+};
 
 // ===========================================================================
 // 4. TABELLE DI CANALI ED EVENTI
@@ -146,18 +227,31 @@ enum IndiceCanale {
   C_GLAT_SX,    // G laterali verso sinistra
   C_G_ACCEL,    // G in accelerazione
   C_G_FRENA,    // G in frenata
+  C_VELOCITA,   // km/h dal GPS (0 se il fix non e' valido, vedi leggiGPS)
   N_CANALI
 };
 
 // Nomi delle colonne CSV, nello stesso ordine dell'enum
 const char *NOME_CANALE[N_CANALI] = {
   "Piega_Dx", "Piega_Sx", "Impennata", "Stoppie",
-  "GLat_Dx", "GLat_Sx", "G_Accel", "G_Frena"
+  "GLat_Dx", "GLat_Sx", "G_Accel", "G_Frena", "Vel_Kmh"
 };
 
-// Cifre decimali nel CSV: 1 per gli angoli, 2 per le G
+// Cifre decimali nel CSV: 1 per gli angoli, 2 per le G, 0 per la velocita'
+// (coerente con come e' gia' mostrata sull'OLED, km/h intero)
 int decimaliCanale(int c) {
-  return (c <= C_STOPPIE) ? 1 : 2;
+  if (c <= C_STOPPIE)  return 1;  // angoli
+  if (c <= C_G_FRENA)  return 2;  // forze G
+  return 0;                       // velocita'
+}
+
+// Simbolo dell'unita' di misura per canale, usato dalla tabella record
+// del sito web. L'OLED non ne ha bisogno: mostra le unita' inline dove
+// serve (es. disegnaGPS, disegnaMeteo), non cicla sulla tabella canali.
+const __FlashStringHelper *unitaCanale(int c) {
+  if (c <= C_STOPPIE)  return F("&deg;");
+  if (c <= C_G_FRENA)  return F(" G");
+  return F(" km/h");
 }
 
 // Eventi: manovre contate quando il livello sostenuto supera la soglia.
@@ -199,16 +293,26 @@ bool eventoInG(int e) {
 // 5. OGGETTI DRIVER E STATO GLOBALE
 // ===========================================================================
 
-const uint8_t SCREEN_WIDTH  = 128;
-const uint8_t SCREEN_HEIGHT = 64;
-// Ultimo parametro -1: nessun pin di reset dedicato per l'OLED
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+// L'oggetto "display" e' definito nel file del driver selezionato
+// (src/driver/Display.h) e dichiarato extern in
+// Config.h, insieme a SCREEN_WIDTH/SCREEN_HEIGHT e ai colori
+// COLORE_ON/COLORE_OFF. Da qui in poi si disegna e basta, senza sapere
+// che pannello c'e' sotto.
 
-// La fusione sensoriale avviene dentro al BNO055: arrivano direttamente
-// angoli in gradi e accelerazione lineare gia' senza gravita'.
-Adafruit_BNO055 bno = Adafruit_BNO055(55, I2C_ADDR_BNO, &Wire);
+// L'oggetto dell'IMU vive nel file del suo driver (src/driver/Imu.h): da
+// qui si passa solo per imuInit(), imuLeggi() e imuCalibrazione(). La
+// fusione sensoriale avviene comunque dentro al chip, quindi arrivano
+// angoli in gradi gia' pronti e accelerazione senza gravita': il
+// firmware non contiene nessun filtro di fusione.
 
-DHT dht(PIN_DHT, DHT22);
+// L'oggetto del sensore meteo vive nel file del suo driver
+// (src/driver/Meteo.h), non qui: da questa parte del
+// firmware si passa solo per meteoInit() e meteoLeggi().
+
+// L'UART del GPS (gpsSerial) sta nel suo driver, dichiarata extern in
+// Config.h. Qui resta solo il parser: TinyGPS++ e' NMEA standard, non
+// dipende da quale modulo c'e' collegato.
+TinyGPSPlus gps;
 
 // Server web su porta 80
 WebServer server(80);
@@ -217,11 +321,21 @@ WebServer server(80);
 bool oledOk    = false;
 bool bnoOk     = false;
 bool memoriaOk = false;
+// Vero per tutti e otto i sensori meteo: quelli I2C rispondono o no sul
+// bus, il DHT22 - che un indirizzo non ce l'ha - viene interrogato
+// davvero e deve consegnare almeno una lettura non-NaN. Vedi meteoInit()
+// in src/driver/Meteo.h.
+bool meteoOk   = false;
 
 // --- Interfaccia ---
+// Ordine delle pagine per temi (v9.13): prima tutto cio' che interessa
+// mentre si guida (sensori + GPS + lap timing), poi lo storico (record),
+// poi la diagnostica di sistema (memoria, WiFi) - le pagine piu' rare
+// da consultare in sella restano in fondo.
 int  schermataCorrente = 0;   // 0 Piega, 1 Meteo, 2 G, 3 Impennata,
-                              // 4 Record, 5 Memoria, 6 WiFi
-const int totaleSchermate = 7;
+                              // 4 GPS, 5 Giri, 6 Record 1/2, 7 Record 2/2,
+                              // 8 Memoria, 9 WiFi
+const int totaleSchermate = 10;
 bool wifiAttivo   = false;    // access point acceso e server in ascolto
 bool lampeggioRec = false;    // alterna l'asterisco della scritta "* REC"
 
@@ -237,6 +351,68 @@ float forzaGLaterale      = 0.0f;  // + destra / - sinistra
 float forzaGLongitudinale = 0.0f;  // + accelerata / - frenata
 float piegaLive           = 0.0f;  // piega CON segno, per i grafici web
 float pitchLive           = 0.0f;  // pitch CON segno (+imp/-stop), per il web
+
+// --- GPS (modulo NEO-6M/8M, UART dedicata: vedi GPS_UART_NUM) --------------
+// Due stati che vanno tenuti separati:
+//
+//   gpsOk         il MODULO risponde, cioe' manda frasi NMEA. Vedi
+//                 gpsAscoltaNMEA().
+//   gpsFixValido  ha AGGANCIATO i satelliti. Arriva decine di secondi
+//                 dopo l'accensione e va e viene in continuazione
+//                 (curve, tettoie, tunnel). Vedi leggiGPS().
+//
+// Modulo scollegato: gpsOk falso. Modulo collegato ma senza cielo: gpsOk
+// vero e gpsFixValido falso. Fino alla v9.14 c'era solo il secondo, e la
+// schermata di avvio spuntava il GPS anche col connettore vuoto.
+bool    gpsOk          = false;
+bool    gpsFixValido   = false;
+double  latitudineGPS  = 0.0;
+double  longitudineGPS = 0.0;
+float   velocitaGPS    = 0.0f;  // km/h, forzata a 0 se il fix non e' valido
+uint8_t satellitiGPS   = 0;     // satelliti agganciati, utile anche senza fix
+
+// --- Lap timing: traguardo "volante" impostato dalla pagina GIRI -----------
+// Per ora vive solo in RAM (nessun salvataggio su flash): si reimposta a
+// ogni accensione. Il salvataggio di piu' tracciati con relativi record
+// arriva in una versione futura; questo e' il primo passo, un solo
+// traguardo alla volta, per validare la logica di rilevamento passaggio.
+bool   traguardoImpostato = false;
+double traguardoLat       = 0.0;
+double traguardoLon       = 0.0;
+
+bool eraFuoriRaggio = true;  // isteresi: serve uscire dal raggio prima di poter ricontare
+
+unsigned long tempiGiro[MAX_GIRI] = {};  // durata di ogni giro completato, ms
+int numGiri       = 0;   // giri completati nella sessione/uscita corrente
+int giroMigliore  = -1;  // indice in tempiGiro del giro piu' veloce, -1 se nessuno
+
+unsigned long inizioGiroCorrente = 0;  // millis() dell'ultimo passaggio sul traguardo
+bool giroInCorso  = false;             // true dal primo passaggio in poi
+
+// --- Forma del tracciato: punti raccolti mentre un giro e' in corso -------
+// Si accumula durante UN giro (si azzera a ogni nuovo giro, vedi
+// rilevaGiro()): diventa la forma salvata del tracciato quando quel
+// giro batte il record di sessione, cosi' la forma memorizzata tende a
+// convergere verso la linea "pulita", non un giro qualunque di prova.
+float formaLat[MAX_PUNTI_FORMA];
+float formaLon[MAX_PUNTI_FORMA];
+int   numPuntiForma   = 0;
+unsigned long ultimoPuntoForma = 0;
+
+// --- Settori: stato di avanzamento nel giro corrente -----------------------
+// prossimoCheckpoint e' l'indice del prossimo checkpoint atteso
+// (0..numCheckpoint-1); quando arriva a numCheckpoint il prossimo punto
+// da raggiungere torna a essere il traguardo (vedi prossimoObiettivo()).
+// Su un tracciato senza checkpoint (numCheckpoint=0) questo indice resta
+// sempre gia' "scaduto", quindi il comportamento e' identico al lap
+// timing a settore singolo di prima: niente casi speciali da gestire.
+int           prossimoCheckpoint     = 0;
+unsigned long inizioSettoreCorrente  = 0;   // millis() dell'ultimo checkpoint/traguardo
+// [giro][settore]: tempo di quel settore in quel giro, ms. Indicizzato
+// come tempiGiro[]: stesso giro, stesso indice, cosi' CSV e web possono
+// mettere in colonna il tempo totale e i settori senza doppio conteggio.
+unsigned long tempiSettorePerGiro[MAX_GIRI][MAX_SETTORI + 1] = {};
+unsigned long tempiSettoreMigliori[MAX_SETTORI + 1] = {};  // migliore di sessione, per settore
 
 // --- Canali: finestra del filtro, massimi del minuto e della sessione ---
 float minimiFinestra[N_CANALI]  = {};  // livello sostenuto (minimo di finestra)
@@ -261,15 +437,16 @@ unsigned long minutiRegistrati    = 0;
 unsigned long inizioRegistrazione = 0;
 
 // --- Record storici ("di sempre") ---
-// I massimi mai registrati, sessione dopo sessione. Vivono in un piccolo
-// file binario sulla flash (FILE_RECORD), quindi sopravvivono allo
-// spegnimento. Si aggiornano solo alla FINE di ogni registrazione:
-// contano solo le manovre fatte col REC attivo, se non e' registrato
-// non e' un record. Il nome non inizia con "LOG_", cosi' non compare
-// nell'elenco sessioni del sito e non e' toccabile da /scarica e
-// /elimina, che accettano solo i file di log.
+// I massimi mai registrati, in un file binario che sopravvive allo
+// spegnimento. Si aggiornano solo alla FINE di una registrazione: se non
+// e' registrato non e' un record.
+//
+// FILE_RECORD e' lo storico della modalita' libera; con un tracciato
+// attivo si usa il suo file dedicato (vedi fileRecordAttivo). Il nome non
+// inizia per "LOG_", cosi' /scarica e /elimina non possono toccarlo.
 const char     FILE_RECORD[] = "/RECORD.BIN";
-const uint32_t MAGIC_RECORD  = 0x57535231;  // "WSR1": firma + versione del formato
+// "WSR2": v9.8 ha aggiunto il canale velocita', la struct e' piu' grande
+const uint32_t MAGIC_RECORD  = 0x57535232;
 
 struct RecordStorici {
   uint32_t magic;             // firma: se non torna, il file non e' mio
@@ -278,6 +455,24 @@ struct RecordStorici {
   uint32_t minutiTotali;      // minuti loggati in tutta la vita del dispositivo
 };
 RecordStorici recordStorici = {};  // tutto a zero finche' non carico il file
+
+// --- Tracciati (circuiti definiti dall'utente, per lap timing e record
+//     separati per pista) ---
+// Ogni tracciato e' una coppia di file: /TRACK_n.BIN (nome + traguardo) e
+// /TRACK_n_REC.BIN (record storici SU quel tracciato, stessa struct
+// RecordStorici della modalita' libera). "n" e' un id progressivo
+// assegnato alla creazione e mai riassegnato quando un tracciato si
+// elimina, cosi' un id vecchio non si confonde con uno nuovo. La struct
+// Tracciato e' dichiarata prima della sezione 4 (vedi il commento li'),
+// qui restano solo le costanti e lo stato del tracciato attivo.
+const char     PREFISSO_TRACK[]     = "/TRACK_";
+const char     SUFFISSO_TRACK_DEF[] = ".BIN";
+const char     SUFFISSO_TRACK_REC[] = "_REC.BIN";
+const uint32_t MAGIC_TRACCIATO      = 0x57535433;  // "WST3": struct piu' grande da v9.12 (forma+settori)
+const int      MAX_TRACCIATI        = 30;          // ~720 byte/tracciato (vedi il commento sulla struct): 30 restano trascurabili
+
+int       tracciatoAttivo   = -1;  // -1 = modalita' libera, altrimenti l'id del tracciato
+Tracciato tracciatoCorrente = {};  // dati del tracciato attivo, vuoto in modalita' libera
 
 // Flag "record appena battuto", canale per canale: accendono l'asterisco
 // nel riepilogo di fine sessione. Si azzerano a ogni nuova registrazione.
@@ -343,6 +538,8 @@ void setup() {
   delay(500);  // lascio stabilizzare l'alimentazione prima di parlare coi sensori
 
   Serial.println(F("=== AVVIO SISTEMA WHEELSTAT ==="));
+  Serial.print(F("Firmware: "));
+  Serial.println(FIRMWARE_VERSION);
 
   // Pulsanti verso GND con pull-up interna: a riposo leggono HIGH
   pinMode(PIN_BTN_SU,  INPUT_PULLUP);
@@ -355,48 +552,71 @@ void setup() {
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   Wire.setClock(I2C_CLOCK_HZ);
 
-  // --- OLED + splash ---
+  // --- OLED. Deve venire per primo, ed e' l'unico che non puo'
+  //     raccontare la propria accensione: fino a qui non c'e' niente su
+  //     cui scrivere. La sequenza di accensione la conosce solo il file
+  //     del driver, qui interessa solo se il pannello ha risposto. ---
   Serial.print(F("Boot OLED...... "));
-  oledOk = display.begin(SSD1306_SWITCHCAPVCC, I2C_ADDR_OLED);
-  if (oledOk) {
-    Serial.println(F("OK."));
-    display.clearDisplay();
-    display.drawRoundRect(8, 12, 112, 40, 6, SSD1306_WHITE);
-    display.setTextSize(2);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(10, 24);
-    display.print(F("WHEELSTAT"));
-    display.display();
-  } else {
-    Serial.println(F("ERRORE! Controlla SDA/SCL."));
-  }
+  oledOk = displayInit();
+  Serial.println(oledOk ? F("OK.") : F("ERRORE! Controlla SDA/SCL."));
 
-  // --- DHT22 (gli errori escono come NaN a runtime, gestiti in leggiMeteo) ---
-  Serial.print(F("Boot DHT22..... "));
-  dht.begin();
-  Serial.println(F("OK."));
+  // Logo animato, poi la lista dei componenti che si riempie mentre
+  // vengono davvero inizializzati, uno per uno. I nomi li dichiarano i
+  // driver stessi (displayNome(), meteoNome(), ...): a schermo compare
+  // sempre la configurazione reale, anche dopo aver cambiato una macro
+  // in Config.h.
+  splashIntro();
+  splashChecklist();
 
-  // --- BNO055 in modalita' NDOF: fusione completa a 9 assi, assetto
-  //     assoluto senza deriva. Range e filtri li gestisce il chip. ---
-  Serial.print(F("Boot BNO055.... "));
-  bnoOk = bno.begin(OPERATION_MODE_NDOF);
-  if (bnoOk) {
-    Serial.println(F("OK."));
-    // Rimappatura hardware per il montaggio reale: da qui in poi il chip
-    // lavora come se fosse piatto con X verso il davanti della moto, e il
-    // resto del firmware non deve sapere come e' girata la scatola.
-    bno.setAxisRemap(REMAP_ASSI);
-    bno.setAxisSign(REMAP_SEGNI);
-    bno.setExtCrystalUse(true);  
-    delay(100);                  
-  } else {
-    Serial.println(F("ERRORE! BNO055 non trovato (prova indirizzo 0x29)."));
-  }
+  splashRigaAttesa(0, F("OLED"), displayNome());
+  splashRigaEsito(0, oledOk);
+
+  // --- Sensore meteo: quale sia lo decide Config.h, qui si sa solo che
+  //     esiste e che potrebbe non rispondere. Va DOPO Wire.begin(): se il
+  //     driver selezionato e' I2C, meteoInit() parla gia' sul bus. ---
+  Serial.print(F("Boot meteo..... "));
+  splashRigaAttesa(1, F("METEO"), meteoNome());
+  meteoOk = meteoInit();
+  splashRigaEsito(1, meteoOk);
+  Serial.println(meteoOk ? F("OK.") : F("ERRORE! Sensore meteo non trovato."));
+
+  // --- IMU: modalita' operativa e rimappatura degli assi per il
+  //     montaggio reale le sa il suo driver; qui interessa solo se il
+  //     chip ha risposto. ---
+  Serial.print(F("Boot IMU....... "));
+  splashRigaAttesa(2, F("IMU"), imuNome());
+  bnoOk = imuInit();
+  splashRigaEsito(2, bnoOk);
+  Serial.println(bnoOk ? F("OK.")
+                       : F("ERRORE! IMU non trovata (prova indirizzo 0x29)."));
+
+  // --- GPS: apro la UART, passo la parola al driver (comandi UBX per il
+  //     5 Hz col NEO-6M/8M, niente con un modulo generico), poi ascolto
+  //     per capire se dall'altra parte c'e' qualcuno.
+  //
+  //     La spunta vuol dire "il modulo manda frasi NMEA", NON "fix
+  //     agganciato": il fix arriva decine di secondi dopo e ha la sua
+  //     pagina. Segnare una croce perche' il satellite non c'e' ancora
+  //     sarebbe fuorviante, e non serve - le frasi escono dal primo
+  //     secondo, anche senza vedere un satellite. ---
+  Serial.print(F("Boot GPS....... "));
+  splashRigaAttesa(3, F("GPS"), gpsNome());
+  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+  delay(200);  // il modulo deve finire il proprio boot prima di accettare comandi
+  gpsConfigura();
+  gpsOk = gpsAscoltaNMEA(ATTESA_NMEA_BOOT);
+  splashRigaEsito(3, gpsOk);
+  Serial.println(gpsOk
+      ? F("OK (in attesa del fix).")
+      : F("ASSENTE! Nessuna frase NMEA: modulo scollegato, non alimentato,\n"
+          "               oppure TX/RX invertiti (il TX del modulo va su GPIO 16)."));
 
   // --- Memoria flash (LittleFS). Il "true" formatta la partizione se al
   //     primissimo avvio non e' ancora inizializzata. ---
   Serial.print(F("Boot memoria... "));
+  splashRigaAttesa(4, F("MEM"), F("LittleFS"));
   memoriaOk = LittleFS.begin(true);
+  splashRigaEsito(4, memoriaOk);
   if (memoriaOk) {
     Serial.print(F("OK ("));
     Serial.print((LittleFS.totalBytes() - LittleFS.usedBytes()) / 1024);
@@ -412,15 +632,25 @@ void setup() {
 
   server.on("/", webElencoFile);
   server.on("/live", webLive);
+  server.on("/style.css", webStyleCss);
   server.on("/dati", webDati);
   server.on("/scarica", webScarica);
+  server.on("/gpx", webGpx);
   server.on("/elimina", webElimina);
   server.on("/azzera_record", webAzzeraRecord);
+  server.on("/tracciati", webTracciati);
+  server.on("/tracciato_crea", webTracciatoCrea);
+  server.on("/tracciato_seleziona", webTracciatoSeleziona);
+  server.on("/tracciato_libera", webTracciatoLibera);
+  server.on("/tracciato_elimina", webTracciatoElimina);
+  server.on("/tracciato_aggiungi_settore", webTracciatoAggiungiSettore);
+  server.on("/tracciato_rimuovi_settori", webTracciatoRimuoviSettori);
+  server.on("/confronta", webConfronta);
   server.onNotFound([]() { server.send(404, "text/plain", "Pagina inesistente"); });
 
   Serial.println(F("=== SISTEMA PRONTO ==="));
 
-  delay(DURATA_SPLASH);      // lascia il logo a schermo per un attimo
+  delay(DURATA_SPLASH);      // lascia leggere la lista dei componenti
   attesaCalibrazioneIMU();   // blocca tutto finche' il magnetometro non e' pronto
 }
 
@@ -432,9 +662,11 @@ void attesaCalibrazioneIMU() {
   unsigned long ultimoDisegno = 0;
 
   while (true) {
-    // Stato di calibrazione letto dal chip (0 = niente, 3 = perfetto)
-    uint8_t calSys, calGyro, calAcc, calMag;
-    bno.getCalibration(&calSys, &calGyro, &calAcc, &calMag);
+    // Livello di calibrazione secondo il driver (0 = niente, 3 = pronto).
+    // Quale grandezza sia a decidere lo sa lui: sul BNO055 e' il
+    // magnetometro, l'unico lento a salire. Un chip che si calibra da
+    // solo ritorna 3 subito e questa schermata si chiude da sola.
+    uint8_t calMag = imuCalibrazione();
 
     if (calMag >= 3) {
       calibrata = true;
@@ -443,34 +675,10 @@ void attesaCalibrazioneIMU() {
     // OK salta la calibrazione
     if (frontePressione(PIN_BTN_OK, statoPrecOk)) break;
 
-    // Ridisegno a 10 FPS come il resto dell'interfaccia
-    if (trascorsi(ultimoDisegno, INTERVALLO_DISPLAY)) {
-      display.clearDisplay();
-      barraTitolo(16, F("CALIBRAZIONE IMU"));
+    // Ridisegno a 10 FPS come il resto dell'interfaccia. Il disegno sta
+    // in PagineOled.ino insieme a tutte le altre schermate.
+    if (trascorsi(ultimoDisegno, INTERVALLO_DISPLAY)) disegnaCalibrazione(calMag);
 
-      // disegno 8 per calibrazione
-      display.drawCircle(28, 26, 10, SSD1306_WHITE);
-      display.drawCircle(28, 46, 10, SSD1306_WHITE);
-      // Freccia in cima: si va verso destra...
-      display.fillTriangle(26, 13, 26, 19, 33, 16, SSD1306_WHITE);
-      // ...e in fondo si torna verso sinistra
-      display.fillTriangle(30, 53, 30, 59, 23, 56, SSD1306_WHITE);
-
-      // A destra solo il valore che conta
-      display.setTextSize(2);
-      display.setCursor(58, 16);
-      display.print(F("MAG"));
-      display.setTextSize(3);
-      display.setCursor(58, 32);
-      display.print(calMag);
-      display.print(F("/3"));
-      display.setTextSize(1);
-
-      display.setCursor(58, 56);
-      display.print(F("[OK] salta"));
-
-      display.display();
-    }
     delay(PAUSA_LOOP);
   }
 
@@ -481,21 +689,7 @@ void attesaCalibrazioneIMU() {
   if (calibrata) {
     Serial.println(F("Magnetometro calibrato (MAG=3)."));
 
-    display.clearDisplay();
-    barraTitolo(16, F("CALIBRAZIONE IMU"));
-
-    display.setTextSize(2);
-    display.setCursor(10, 22);
-    display.print(F("CALIBRATO"));
-    display.setTextSize(1);
-
-    display.setCursor(43, 42);
-    display.print(F("MAG 3/3"));
-
-    display.setCursor(4, 56);
-    display.print(F("[tasto] per iniziare"));
-
-    display.display();
+    disegnaCalibrazioneOk();
     attesaTastoRiepilogo();  // tasto per proseguire (timeout di sicurezza 30 s)
   } else {
     Serial.println(F("Calibrazione saltata dall'utente."));
@@ -511,6 +705,8 @@ void attesaCalibrazioneIMU() {
 void loop() {
   if (trascorsi(ultimaLetturaMeteo, INTERVALLO_METEO)) leggiMeteo();
   leggiIMU();  // ad ogni giro, per non perdere i picchi
+  leggiGPS();  // idem: i byte NMEA arrivano in streaming, vanno svuotati subito
+  rilevaGiro();  // usa la posizione appena letta da leggiGPS()
 
   gestisciPulsanti();
 
@@ -533,15 +729,91 @@ void loop() {
 // 8. SENSORI E FILTRO ANTI-BUCA
 // ===========================================================================
 
-// Se una lettura del DHT22 fallisce
+// Orchestrazione, non lettura: quale sensore c'e' e come si interroga lo
+// sa solo il suo driver (vedi il contratto in Config.h). Qui restano le
+// due sole cose che non dipendono dal componente montato: tenere gli
+// ultimi valori buoni e ricalcolare il rischio grip.
 void leggiMeteo() {
-  float t = dht.readTemperature();
-  float u = dht.readHumidity();
+  // Si parte dagli ultimi valori buoni: il driver sovrascrive solo cio'
+  // che riesce a leggere davvero, quindi una lettura sporca di umidita'
+  // non si porta via anche una temperatura valida.
+  float t = temperatura;
+  float u = umidita;
 
-  if (!isnan(t)) temperatura = t;
-  if (!isnan(u)) umidita = u;
+  if (meteoOk && meteoLeggi(t, u)) {
+    temperatura = t;
+    umidita     = u;
+  }
 
+  // Fuori dall'if di proposito: anche con una lettura fallita o il
+  // sensore assente il rischio va ricalcolato, cosi' resta coerente coi
+  // valori di partenza neutri introdotti in v9.2 invece di restare
+  // fermo a un valore mai inizializzato.
   calcolaRischioGrip();
+}
+
+// --- Configurazione del modulo GPS -----------------------------------------
+// Sta nel file del driver selezionato (src/driver/Gps.h):
+// e' l'unica parte del GPS che dipende da quale modulo e' collegato.
+// Quella che segue, la lettura, e' NMEA standard e vale per tutti.
+
+// Controlla se c'e' davvero un modulo attaccato. Aprire la UART non basta
+// a dirlo, si apre senza errori anche verso il vuoto; l'unica prova e' che
+// ne escano dei byte. Un ricevitore alimentato manda frasi NMEA anche
+// senza fix (GGA e RMC escono coi campi vuoti finche' i satelliti non sono
+// agganciati), quindi ascoltare qui distingue un modulo assente da uno che
+// sta ancora cercando il cielo, senza aspettare l'aggancio.
+//
+// Si cerca la coppia "$G" invece di un byte qualunque perche' un pin RX
+// scollegato galleggia e ogni tanto produce rumore, ma non l'inizio di una
+// frase NMEA. I talker GNSS cominciano tutti per G: GP, GN, GL, GA, GB.
+//
+// Il timeout intero si paga solo quando il modulo non c'e'.
+bool gpsAscoltaNMEA(unsigned long timeoutMs) {
+  unsigned long inizio = millis();
+  bool dollaro = false;
+
+  while (millis() - inizio < timeoutMs) {
+    while (gpsSerial.available() > 0) {
+      char c = gpsSerial.read();
+      if (dollaro && c == 'G') return true;
+      dollaro = (c == '$');
+    }
+    delay(1);  // niente attesa attiva a vuoto: lascia respirare il watchdog
+  }
+  return false;
+}
+
+// Svuota il buffer seriale del GPS a ogni giro di loop: i dati NMEA
+// arrivano in streaming continuo, se non li consumo subito si accumulano
+// e il fix che leggo non e' piu' quello attuale (stesso motivo per cui
+// leggiIMU() gira a ogni ciclo invece che a intervalli fissi).
+void leggiGPS() {
+  while (gpsSerial.available() > 0) {
+    // Un modulo che parla adesso e' presente anche se al boot non aveva
+    // ancora aperto bocca (alimentazione lenta, o connettore inserito a
+    // firmware gia' partito). Corregge solo falsi negativi.
+    gpsOk = true;
+    gps.encode(gpsSerial.read());
+  }
+
+  // Un fix e' valido solo se recente: age() cresce finche' non arriva una
+  // nuova frase valida, quindi un fix "vecchio" (satelliti persi) scade
+  // da solo anche se l'ultimo valore restava tecnicamente "valid".
+  gpsFixValido = gps.location.isValid() &&
+                 gps.location.age() < GPS_FIX_TIMEOUT_MS;
+
+  if (gpsFixValido) {
+    latitudineGPS  = gps.location.lat();
+    longitudineGPS = gps.location.lng();
+    velocitaGPS    = gps.speed.isValid() ? gps.speed.kmph() : 0.0f;
+  } else {
+    velocitaGPS = 0.0f;  // niente fix, niente velocita': evita un numero congelato
+  }
+
+  // I satelliti agganciati si aggiornano anche senza fix 3D completo:
+  // utile per capire "sto per agganciare" invece di un secco si/no
+  satellitiGPS = gps.satellites.isValid() ? gps.satellites.value() : 0;
 }
 
 // Lettura IMU: aggiorna i valori live per display e web, poi passa la mano
@@ -549,24 +821,21 @@ void leggiMeteo() {
 void leggiIMU() {
   if (!bnoOk) return;
 
-  // Due viste degli stessi dati, calcolate dal chip:
-  //   VECTOR_EULER       -> angoli di assetto in gradi, gia' fusi e filtrati
-  //   VECTOR_LINEARACCEL -> accelerazione in m/s^2 con la gravita' gia' tolta
-  sensors_event_t orientazione, accelLineare;
-  bno.getEvent(&orientazione, Adafruit_BNO055::VECTOR_EULER);
-  bno.getEvent(&accelLineare, Adafruit_BNO055::VECTOR_LINEARACCEL);
+  // Le quattro grandezze arrivano gia' riferite agli assi della moto:
+  // quale asse del chip corrisponde a cosa lo sa solo il suo driver
+  // (vedi il contratto in Config.h e la nota in src/driver/Imu.h).
+  float piegaGrezza, impennataGrezza, accelLong, accelLat;
+  if (!imuLeggi(piegaGrezza, impennataGrezza, accelLong, accelLat)) return;
 
-  // Gravita' gia' sottratta, quindi basta dividere per 9.81: i valori
-  // restano corretti anche con la moto in piega.
-  forzaGLongitudinale = SEGNO_G_LONG * accelLineare.acceleration.x / GRAVITA;
-  forzaGLaterale      = SEGNO_G_LAT  * accelLineare.acceleration.y / GRAVITA;
+  // Gravita' gia' sottratta dal driver, quindi basta dividere per 9.81:
+  // i valori restano corretti anche con la moto in piega.
+  forzaGLongitudinale = SEGNO_G_LONG * accelLong / GRAVITA;
+  forzaGLaterale      = SEGNO_G_LAT  * accelLat  / GRAVITA;
 
-  // il BNO0 chiama "roll" (.y) la rotazione sull'asse
-  // LATERALE e "pitch" (.z) quella sull'asse di MARCIA, al contrario dei
-  // nomi aeronautici. Quindi .z -> piega, .y -> impennata.
-  // verificato con la v6.3, che li aveva scambiati.
-  piegaLive = SEGNO_PIEGA     * normalizzaAngolo(orientazione.orientation.z - offsetPiega);
-  pitchLive = SEGNO_IMPENNATA * normalizzaAngolo(orientazione.orientation.y - offsetImpennata);
+  // Qui restano le due cose che non dipendono dal chip: la taratura di
+  // zero (compensa il montaggio non in bolla) e i versi.
+  piegaLive = SEGNO_PIEGA     * normalizzaAngolo(piegaGrezza - offsetPiega);
+  pitchLive = SEGNO_IMPENNATA * normalizzaAngolo(impennataGrezza - offsetImpennata);
 
   angoloPiega = fabsf(piegaLive);
 
@@ -602,6 +871,12 @@ void aggiornaFiltroAntibuca() {
   attuale[C_GLAT_SX]   = (forzaGLaterale <  0) ? -forzaGLaterale : 0.0f;
   attuale[C_G_ACCEL]   = (forzaGLongitudinale >= 0) ?  forzaGLongitudinale : 0.0f;
   attuale[C_G_FRENA]   = (forzaGLongitudinale <  0) ? -forzaGLongitudinale : 0.0f;
+  // GPS aggiorna a ~1 Hz, molto piu' lento della finestra da 150 ms: la
+  // maggior parte delle finestre vede semplicemente lo stesso valore
+  // ripetuto (il filtro anti-buca diventa un no-op per questo canale),
+  // ma restare sulla stessa tabella significa niente codice speciale e
+  // niente eccezioni da spiegare altrove (record, CSV, pagine).
+  attuale[C_VELOCITA]  = velocitaGPS;
 
   if (!finestraAvviata) {
     // Primo campione: la finestra parte da qui
@@ -638,6 +913,22 @@ void azzeraStatistiche() {
     conteggioEventi[e] = 0;
     eventoInCorso[e] = false;
   }
+
+  // Giri: si riparte da zero a ogni nuova registrazione, ma il traguardo
+  // impostato resta valido finche' non lo cambi tu (vive finche' vive
+  // l'accensione, vedi il commento sulla dichiarazione piu' sopra)
+  numGiri = 0;
+  giroMigliore = -1;
+  giroInCorso = false;
+  eraFuoriRaggio = true;
+  inizioGiroCorrente = 0;
+
+  // Settori: si riparte anche qui, i checkpoint del tracciato (se c'e'
+  // un tracciato attivo) restano quelli di prima
+  prossimoCheckpoint = 0;
+  inizioSettoreCorrente = 0;
+  numPuntiForma = 0;
+  for (int s = 0; s <= MAX_SETTORI; s++) tempiSettoreMigliori[s] = 0;
 }
 
 // Confronta i livelli sostenuti della finestra appena chiusa coi record di
@@ -670,6 +961,130 @@ void rilevaEventi() {
   contaEvento(EV_ACCEL,     minimiFinestra[C_G_ACCEL]);
 }
 
+// Distanza in metri tra la posizione GPS attuale e un punto arbitrario.
+// Il chiamante deve gia' aver verificato gpsFixValido.
+float distanzaDa(double lat, double lon) {
+  return (float)TinyGPSPlus::distanceBetween(latitudineGPS, longitudineGPS, lat, lon);
+}
+
+// Distanza al traguardo: caso specifico di distanzaDa(), usato dalla
+// pagina OLED GIRI quando non ci sono settori da inseguire.
+float distanzaTraguardo() {
+  return distanzaDa(traguardoLat, traguardoLon);
+}
+
+// Il prossimo punto da raggiungere per il lap timing: un checkpoint
+// intermedio se il tracciato attivo ne ha e non sono ancora stati tutti
+// passati in QUESTO giro, altrimenti il traguardo (sia per chiudere il
+// giro, sia per armare il primissimo cronometro). "ultimo" e' true
+// quando il punto restituito e' il traguardo: sia rilevaGiro() sia la
+// pagina OLED GIRI usano questa stessa funzione, cosi' "cosa sto
+// inseguendo adesso" e' definito in un solo posto.
+void prossimoObiettivo(double &lat, double &lon, bool &ultimo) {
+  if (!giroInCorso || prossimoCheckpoint >= tracciatoCorrente.numCheckpoint) {
+    lat = traguardoLat;
+    lon = traguardoLon;
+    ultimo = true;
+  } else {
+    lat = tracciatoCorrente.checkpointLat[prossimoCheckpoint];
+    lon = tracciatoCorrente.checkpointLon[prossimoCheckpoint];
+    ultimo = false;
+  }
+}
+
+// Passaggio sul prossimo obiettivo (checkpoint o traguardo). Stessa
+// isteresi degli eventi ma sulla distanza GPS: bisogna uscire dal raggio
+// prima di poter ricontare, cosi' il rumore vicino al punto non conta
+// doppio.
+//
+// ATTENZIONE: MIN_INTERVALLO_GIRO_MS (15 s) si applica a OGNI settore,
+// non solo al giro intero. Due checkpoint percorribili in meno di 15 s
+// fanno scartare quel passaggio.
+//
+// Un checkpoint chiude solo il SETTORE, il traguardo chiude anche il
+// giro. Senza checkpoint prossimoObiettivo() restituisce sempre il
+// traguardo: nessun caso speciale da gestire qui.
+void rilevaGiro() {
+  if (!traguardoImpostato || !gpsFixValido) return;
+
+  double obLat, obLon;
+  bool obETraguardo;
+  prossimoObiettivo(obLat, obLon, obETraguardo);
+
+  // Campiono un punto della forma ogni tanto, mentre un giro e' in
+  // corso: diventa la forma salvata del tracciato se questo giro batte
+  // il record di sessione (vedi piu' sotto, salvaFormaTracciato()).
+  if (giroInCorso && numPuntiForma < MAX_PUNTI_FORMA &&
+      trascorsi(ultimoPuntoForma, INTERVALLO_PUNTO_FORMA_MS)) {
+    formaLat[numPuntiForma] = (float)latitudineGPS;
+    formaLon[numPuntiForma] = (float)longitudineGPS;
+    numPuntiForma++;
+  }
+
+  float distanza = distanzaDa(obLat, obLon);
+
+  if (distanza > RAGGIO_TRAGUARDO_M) {
+    eraFuoriRaggio = true;  // pronto a contare il prossimo passaggio
+    return;
+  }
+
+  // Dentro il raggio: conta solo se ero uscito e se e' passato abbastanza
+  // tempo dall'ultimo checkpoint/traguardo (il tempo minimo vale anche
+  // per il primissimo passaggio, inizioSettoreCorrente=0 all'avvio rende
+  // il controllo innocuo)
+  if (!eraFuoriRaggio) return;
+  if (giroInCorso && millis() - inizioSettoreCorrente < MIN_INTERVALLO_GIRO_MS) return;
+
+  unsigned long adesso = millis();
+  eraFuoriRaggio = false;
+
+  if (!obETraguardo) {
+    // Checkpoint intermedio: chiudo solo il settore, il giro resta aperto
+    unsigned long tempoSettore = adesso - inizioSettoreCorrente;
+    if (numGiri < MAX_GIRI) tempiSettorePerGiro[numGiri][prossimoCheckpoint] = tempoSettore;
+    if (tempiSettoreMigliori[prossimoCheckpoint] == 0 || tempoSettore < tempiSettoreMigliori[prossimoCheckpoint])
+      tempiSettoreMigliori[prossimoCheckpoint] = tempoSettore;
+    inizioSettoreCorrente = adesso;
+    prossimoCheckpoint++;
+    return;
+  }
+
+  // Traguardo: chiude l'ultimo settore (se un giro era gia' in corso,
+  // cioe' questo non e' il primissimo passaggio che arma il cronometro)
+  // e il giro intero
+  int indiceUltimoSettore = tracciatoCorrente.numCheckpoint;
+  if (giroInCorso) {
+    unsigned long tempoSettore = adesso - inizioSettoreCorrente;
+    if (numGiri < MAX_GIRI) tempiSettorePerGiro[numGiri][indiceUltimoSettore] = tempoSettore;
+    if (tempiSettoreMigliori[indiceUltimoSettore] == 0 || tempoSettore < tempiSettoreMigliori[indiceUltimoSettore])
+      tempiSettoreMigliori[indiceUltimoSettore] = tempoSettore;
+
+    if (numGiri < MAX_GIRI) {
+      unsigned long durata = adesso - inizioGiroCorrente;
+      bool recordGiro = (giroMigliore < 0 || durata < tempiGiro[giroMigliore]);
+
+      tempiGiro[numGiri] = durata;
+      if (recordGiro) giroMigliore = numGiri;
+      numGiri++;
+
+      // Il giro appena chiuso e' il migliore della sessione: se e' anche
+      // un tracciato salvato, i punti appena raccolti diventano la sua
+      // forma di riferimento. La linea piu' veloce e' di solito anche
+      // la piu' "pulita" da vedere disegnata.
+      if (recordGiro && tracciatoAttivo >= 0 && numPuntiForma >= 4) {
+        salvaFormaTracciato();
+      }
+    }
+  }
+
+  // Questo stesso passaggio apre (o riapre) il cronometro per il prossimo giro
+  inizioGiroCorrente    = adesso;
+  inizioSettoreCorrente = adesso;
+  giroInCorso           = true;
+  prossimoCheckpoint    = 0;
+  numPuntiForma         = 0;
+}
+
 // Indice indicativo 0-100: umidita' oltre il 55% e temperatura sotto i 20
 // gradi fanno salire il rischio, asfalto caldo e asciutto = 0.
 void calcolaRischioGrip() {
@@ -688,7 +1103,8 @@ void calcolaRischioGrip() {
 // 10. PULSANTI E TARATURA
 // ===========================================================================
 
-//dopo un click qualunque ci sono 250 ms di tempo morto, che evitano anche pressioni combinate accidentali.
+// Dopo un click qualunque ci sono 250 ms di tempo morto, che evitano
+// anche pressioni combinate accidentali.
 void gestisciPulsanti() {
   bool premutoSu  = frontePressione(PIN_BTN_SU,  statoPrecSu);
   bool premutoGiu = frontePressione(PIN_BTN_GIU, statoPrecGiu);
@@ -697,26 +1113,34 @@ void gestisciPulsanti() {
 
   if (millis() - ultimoTempoPulsante < TEMPO_DEBOUNCE) return;
 
+  // Il cambio pagina passa dalla transizione, che disegna gia' lei la
+  // pagina nuova: il verso dello scorrimento e' quello del tasto, cosi'
+  // si vede da che parte ci si sta muovendo nell'elenco. Il tempo morto
+  // si riarma DOPO l'animazione, altrimenti tenendo premuto il tasto le
+  // pressioni si accavallerebbero sopra lo scorrimento.
   if (premutoSu) {
     // Pagina precedente (il "+ totaleSchermate" evita il modulo negativo)
     schermataCorrente = (schermataCorrente + totaleSchermate - 1) % totaleSchermate;
+    transizionePagina(-1);
     ultimoTempoPulsante = millis();
   }
   else if (premutoGiu) {
     // Pagina successiva, con ritorno alla prima dopo l'ultima
     schermataCorrente = (schermataCorrente + 1) % totaleSchermate;
+    transizionePagina(+1);
     ultimoTempoPulsante = millis();
   }
   else if (premutoOk) {
-    // OK cambia mestiere a seconda della pagina. Sulla pagina RECORD (4)
-    // di proposito non fa nulla: azzerare lo storico con una pressione
-    // accidentale (magari coi guanti) sarebbe irreversibile, quindi
-    // l'azzeramento passa solo dal sito web, con conferma.
+    // OK cambia mestiere a seconda della pagina. Sulle pagine RECORD (6,
+    // 7) di proposito non fa nulla: azzerare lo storico con una
+    // pressione accidentale (magari coi guanti) sarebbe irreversibile,
+    // quindi l'azzeramento passa solo dal sito web, con conferma.
     if (schermataCorrente == 0 || schermataCorrente == 3) taraturaZero();
-    else if (schermataCorrente == 6) {
+    else if (schermataCorrente == 9) {
       if (wifiAttivo) fermaWiFi();
       else avviaWiFi();
     }
+    else if (schermataCorrente == 5) impostaTraguardo();
     ultimoTempoPulsante = millis();
   }
   else if (premutoLog) {
@@ -732,29 +1156,100 @@ void gestisciPulsanti() {
 void taraturaZero() {
   if (!bnoOk) return;
 
-  sensors_event_t orientazione;
-  bno.getEvent(&orientazione, Adafruit_BNO055::VECTOR_EULER);
+  // Le stesse quattro grandezze di leggiIMU, ma qui servono solo i due
+  // angoli: l'assetto attuale diventa il nuovo zero. Le accelerazioni si
+  // leggono e si buttano, il contratto e' uno solo.
+  float piegaGrezza, impennataGrezza, accelLong, accelLat;
+  if (!imuLeggi(piegaGrezza, impennataGrezza, accelLong, accelLat)) return;
 
-  // Stessi canali di leggiIMU: .z = piega, .y = impennata
-  offsetPiega     = orientazione.orientation.z;
-  offsetImpennata = orientazione.orientation.y;
+  offsetPiega     = piegaGrezza;
+  offsetImpennata = impennataGrezza;
 
-  // Popup di conferma (solo se il display c'e'). Unica pausa bloccante
-  // del firmware: accettabile perche' la taratura si fa sempre da fermi.
-  if (oledOk) {
-    display.fillRoundRect(15, 18, 98, 28, 4, SSD1306_BLACK);
-    display.drawRoundRect(15, 18, 98, 28, 4, SSD1306_WHITE);
-    display.setCursor(22, 28);
-    display.print(F("CALIBRAZIONE OK"));
-    display.display();
-    delay(DURATA_POPUP);
-  }
+  // Popup di conferma, la stessa cornice degli altri due messaggi (il
+  // controllo su oledOk lo fa gia' popupMessaggio). E' una pausa
+  // bloccante, accettabile perche' la taratura si fa sempre da fermi.
+  popupMessaggio(F("CALIBRAZIONE OK"));
 
   Serial.println(F("Taratura zero eseguita."));
 }
 
+// Popup centrale (sfondo nero, bordo bianco) sopra la pagina corrente.
+// Ci passano tutti e tre i messaggi istantanei: conferma taratura, errore
+// "GPS senza fix" e conferma traguardo.
+//
+// Si apre crescendo dal centro, cosi' si capisce che e' appena successo
+// qualcosa invece di sembrare un disturbo dello schermo. Ogni fotogramma
+// e' piu' grande del precedente e centrato, quindi il suo riempimento nero
+// copre da solo il bordo di quello prima: la pagina sotto non va
+// ridisegnata.
+void popupMessaggio(const __FlashStringHelper *testo) {
+  if (!oledOk) return;
+
+  const int MARGINE_POPUP = 9;
+  const int LARGHEZZA     = SCREEN_WIDTH - 2 * MARGINE_POPUP;
+  const int ALTEZZA       = 28;
+  const int CENTRO_Y      = 32;
+  const int PASSI_APERTURA = 4;
+
+  for (int passo = 1; passo <= PASSI_APERTURA; passo++) {
+    int w = LARGHEZZA * passo / PASSI_APERTURA;
+    int h = ALTEZZA   * passo / PASSI_APERTURA;
+    int x = SCREEN_WIDTH / 2 - w / 2;
+    int y = CENTRO_Y - h / 2;
+
+    display.fillRoundRect(x, y, w, h, 4, COLORE_OFF);
+    display.drawRoundRect(x, y, w, h, 4, COLORE_ON);
+    display.display();
+  }
+
+  display.setCursor(centraTesto(testo), CENTRO_Y - 4);
+  display.print(testo);
+  display.display();
+  delay(DURATA_POPUP);
+}
+
+// Salva la posizione GPS attuale come traguardo per il lap timing. Va
+// fatto fermi sulla linea di partenza/arrivo, col fix gia' agganciato.
+// Cambiare traguardo a meta' uscita azzera anche i giri gia' contati:
+// non avrebbe senso confrontarli con una linea diversa.
+void impostaTraguardo() {
+  if (!gpsFixValido) {
+    popupMessaggio(F("GPS senza fix!"));
+    Serial.println(F("Impossibile impostare il traguardo: GPS senza fix."));
+    return;
+  }
+
+  traguardoLat       = latitudineGPS;
+  traguardoLon       = longitudineGPS;
+  traguardoImpostato = true;
+
+  // Nuovo traguardo, nuovo conteggio: i giri gia' fatti erano su un'altra linea
+  numGiri = 0;
+  giroMigliore = -1;
+  giroInCorso = false;
+  eraFuoriRaggio = true;
+  inizioGiroCorrente = 0;
+  prossimoCheckpoint = 0;
+  inizioSettoreCorrente = 0;
+  numPuntiForma = 0;
+  for (int s = 0; s <= MAX_SETTORI; s++) tempiSettoreMigliori[s] = 0;
+
+  // Se e' selezionato un tracciato salvato, la nuova posizione diventa
+  // permanente per quel tracciato (utile per affinare la linea stando
+  // li' fisicamente). In modalita' libera invece resta solo in RAM,
+  // esattamente come per un tracciato non salvato.
+  if (tracciatoAttivo >= 0) {
+    tracciatoCorrente.traguardoLat = traguardoLat;
+    tracciatoCorrente.traguardoLon = traguardoLon;
+    salvaTracciato(tracciatoAttivo, tracciatoCorrente);
+  }
+
+  popupMessaggio(F("TRAGUARDO OK"));
+  Serial.println(F("Traguardo impostato sulla posizione attuale."));
+}
+
 // ===========================================================================
-// 11. REGISTRAZIONE E RECORD STORICI SU MEMORIA FLASH 
+// 11. REGISTRAZIONE E RECORD STORICI SU MEMORIA FLASH
 // ===========================================================================
 
 // Trova il primo nome libero LOG_n.CSV, scrive l'intestazione delle colonne
@@ -795,13 +1290,14 @@ void avviaRegistrazione() {
     Serial.println(F("ERRORE: impossibile creare il file di log."));
     return;
   }
-  // Intestazione: Minuto + colonne canali + meteo
+  // Intestazione: Minuto + colonne canali (velocita' inclusa, e' un
+  // canale come gli altri) + meteo + posizione GPS + giro in corso
   logFile.print(F("Minuto"));
   for (int c = 0; c < N_CANALI; c++) {
     logFile.print(',');
     logFile.print(NOME_CANALE[c]);
   }
-  logFile.println(F(",Temp_C,Umid_%,Rischio_%"));
+  logFile.println(F(",Temp_C,Umid_%,Rischio_%,Lat,Lon,Giro"));
   logFile.close();
 
   // Sessione nuova: azzero massimi, contatori eventi, flag record e timer
@@ -824,8 +1320,10 @@ void fermaRegistrazione() {
   Serial.println(F("REC ARRESTATA. File chiuso."));
 
   scriviRiepilogoSuFlash();
-  aggiornaRecordStorici();  // PRIMA del riepilogo: cosi' gli asterischi
-                            // "nuovo record" sono gia' pronti a schermo
+  // Entrambe PRIMA del riepilogo a schermo: cosi' gli asterischi "nuovo
+  // record" (canali e giro) sono gia' pronti quando si disegna la pagina
+  aggiornaRecordStorici();       // canali: sul file del tracciato attivo (o quello globale)
+  aggiornaRecordGiroTracciato(); // giro migliore di sempre, solo se c'e' un tracciato attivo
   mostraRiepilogoSessione();
 }
 
@@ -852,7 +1350,22 @@ void scriviDatiSuFlash() {
   logFile.print(',');
   logFile.print(temperatura, 1);  logFile.print(',');
   logFile.print(umidita, 1);      logFile.print(',');
-  logFile.println(indiceRischio, 0);
+  logFile.print(indiceRischio, 0);
+
+  // Posizione e giro in corso a fine minuto: utili per rileggere dove si
+  // era e su quale giro, mesi dopo, senza dover riguardare la traccia
+  // live sul sito (che vive solo nel browser, non viene salvata). Lat/Lon
+  // restano quelle dell'ultimo fix valido anche se il GPS lo ha appena
+  // perso (vedi leggiGPS): un'ultima posizione nota e' piu' utile di
+  // "0,0", che sarebbe in mezzo all'oceano.
+  int giroAttuale = (traguardoImpostato && giroInCorso) ? (numGiri + 1) : 0;
+  logFile.print(',');
+  logFile.print(latitudineGPS, 6);
+  logFile.print(',');
+  logFile.print(longitudineGPS, 6);
+  logFile.print(',');
+  logFile.println(giroAttuale);
+
   logFile.close();
 
   azzeraCanali(massimiMinuto);  // il prossimo minuto riparte da zero
@@ -869,6 +1382,13 @@ void scriviRiepilogoSuFlash() {
 
   // Massimi dell'intera sessione
   logFile.println();  // riga vuota che separa il riepilogo dai dati
+
+  // Tracciato attivo durante questa sessione: utile riaprendo il file
+  // tra mesi, quando magari il tracciato e' stato anche rinominato
+  logFile.print(F("TRACCIATO,"));
+  if (tracciatoAttivo < 0) logFile.println(F("libera"));
+  else logFile.println(tracciatoCorrente.nome);
+
   logFile.print(F("RIEPILOGO"));
   for (int c = 0; c < N_CANALI; c++) {
     logFile.print(',');
@@ -906,27 +1426,77 @@ void scriviRiepilogoSuFlash() {
     logFile.print(conteggioEventi[e]);
   }
   logFile.println();
+
+  // Tempi giro, solo se era impostato un traguardo e ne e' stato
+  // completato almeno uno. Stessa idea dell'asterisco "nuovo record":
+  // qui marca il giro piu' veloce della sessione appena chiusa. Se il
+  // tracciato ha dei checkpoint, ogni riga guadagna una colonna per
+  // settore (Settore_1, Settore_2, ...): leggiInfoSessione() continua a
+  // leggere solo il tempo totale subito dopo la prima virgola, quindi
+  // resta compatibile con i file scritti prima che esistessero i settori.
+  if (numGiri > 0) {
+    int numSettoriAttivi = tracciatoCorrente.numCheckpoint + 1;
+
+    logFile.println();
+    logFile.print(F("GIRI,Tempo_s"));
+    if (numSettoriAttivi > 1) {
+      for (int s = 0; s < numSettoriAttivi; s++) {
+        logFile.print(F(",Settore_"));
+        logFile.print(s + 1);
+      }
+    }
+    logFile.println();
+
+    for (int g = 0; g < numGiri; g++) {
+      logFile.print(F("Giro_"));
+      logFile.print(g + 1);
+      logFile.print(',');
+      logFile.print(tempiGiro[g] / 1000.0, 2);
+      if (g == giroMigliore) logFile.print('*');
+      if (numSettoriAttivi > 1) {
+        for (int s = 0; s < numSettoriAttivi; s++) {
+          logFile.print(',');
+          logFile.print(tempiSettorePerGiro[g][s] / 1000.0, 2);
+        }
+      }
+      logFile.println();
+    }
+  }
+
   logFile.close();
 
   Serial.println(F("Riepilogo sessione scritto in memoria."));
 }
 
 // --- Record storici --------------------------------------------------------
-//la struct viene scritta e riletta cosi' com'e' in RAM, senza parsing di testo e senza errori di formato.
-// A fare da controllo c'e' la firma "magic", che contiene anche la
+// La struct viene scritta e riletta cosi' com'e' in RAM, senza parsing
+// di testo e senza errori di formato. A fare da controllo c'e' la firma
+// "magic", che contiene anche la
 // versione del formato: se in futuro cambio la struct mi basta cambiare
 // MAGIC_RECORD, i vecchi file non tornano piu' validi e si riparte da
 // zero invece di leggere numeri sballati.
 
-// Legge il file dei record all'avvio. Se non esiste (primissimo avvio)
-// o non supera i controlli, si resta coi record a zero: nessun errore
-// bloccante, il sistema parte lo stesso.
+// File dei record ATTIVO in questo momento: quello del tracciato
+// selezionato, o FILE_RECORD in modalita' libera. Un solo punto dove si
+// decide "quale storico e' in RAM adesso": caricaRecordStorici(),
+// salvaRecordStorici() e aggiornaRecordStorici() lo usano tutti, cosi'
+// cambiare tracciato cambia da solo quale storico si legge e si scrive
+// senza toccare il resto del firmware.
+String fileRecordAttivo() {
+  return (tracciatoAttivo < 0) ? String(FILE_RECORD) : percorsoRecordTracciato(tracciatoAttivo);
+}
+
+// Legge il file dei record del tracciato attivo (o quello globale in
+// modalita' libera). Se non esiste (primissimo avvio, o un tracciato
+// appena creato) o non supera i controlli, si resta coi record a zero:
+// nessun errore bloccante, il sistema parte lo stesso.
 void caricaRecordStorici() {
+  recordStorici = RecordStorici{};  // riparto pulito: il file attivo potrebbe essere un altro
   if (!memoriaOk) return;
 
-  File f = LittleFS.open(FILE_RECORD, FILE_READ);
+  File f = LittleFS.open(fileRecordAttivo(), FILE_READ);
   if (!f) {
-    Serial.println(F("Nessun file record: storico che parte da zero."));
+    Serial.println(F("Nessun file record per questo storico: si parte da zero."));
     return;
   }
 
@@ -953,7 +1523,7 @@ void salvaRecordStorici() {
   if (!memoriaOk) return;
 
   recordStorici.magic = MAGIC_RECORD;  // la firma la metto sempre io qui
-  File f = LittleFS.open(FILE_RECORD, FILE_WRITE);
+  File f = LittleFS.open(fileRecordAttivo(), FILE_WRITE);
   if (!f) {
     Serial.println(F("ERRORE: impossibile salvare i record storici."));
     return;
@@ -981,663 +1551,142 @@ void aggiornaRecordStorici() {
 }
 
 // ===========================================================================
-// 12. RIEPILOGO DI FINE SESSIONE (OLED)
+// 11B. TRACCIATI (GESTIONE MULTI-CIRCUITO)
 // ===========================================================================
+// Ogni tracciato vive in un file di definizione (nome + traguardo) piu' un
+// file di record separato (stessa struct RecordStorici della modalita'
+// libera, vedi fileRecordAttivo() piu' sopra). Qui ci sono solo le
+// funzioni di supporto: la UI vera e propria e' sulla pagina web
+// /tracciati e sulla pagina OLED GIRI (che riusa i campi gia' esposti).
 
-// Attende un tasto qualsiasi; true se premuto, false allo scadere del
-// timeout. I primi 500 ms si ignorano, altrimenti il rimbalzo del tasto
-// appena rilasciato chiuderebbe subito la pagina.
-bool attesaTastoRiepilogo() {
-  unsigned long ingresso = millis();
-  while (millis() - ingresso < RIEPILOGO_TIMEOUT) {
-    // Il telefono deve poter navigare anche durante il riepilogo
-    if (wifiAttivo) server.handleClient();
-
-    bool tasto = frontePressione(PIN_BTN_SU,  statoPrecSu);
-    tasto |= frontePressione(PIN_BTN_GIU, statoPrecGiu);
-    tasto |= frontePressione(PIN_BTN_OK,  statoPrecOk);
-    tasto |= frontePressione(PIN_BTN_LOG, statoPrecLog);
-    if (tasto && millis() - ingresso > 500) return true;
-    delay(PAUSA_LOOP);
-  }
-  return false;
+// Percorso del file di definizione di un tracciato dato il suo id
+String percorsoTracciato(int id) {
+  return String(PREFISSO_TRACK) + String(id) + String(SUFFISSO_TRACK_DEF);
 }
 
-// Riepilogo in due pagine: massimi di sessione, poi contatore eventi.
-// Un tasto passa alla pagina successiva (l'ultima esce), il timeout
-// chiude tutto. L'attesa bloccante e' accettabile: la registrazione si
-// ferma sempre da fermi.
-void mostraRiepilogoSessione() {
-  mostraPaginaMassimi();
-  if (attesaTastoRiepilogo()) {
-    mostraPaginaEventi();
-    attesaTastoRiepilogo();
-  }
-
-  // Il tasto premuto per uscire non deve anche azionare il menu
-  ultimoTempoPulsante = millis();
+// Percorso del file record storici di un tracciato dato il suo id
+String percorsoRecordTracciato(int id) {
+  return String(PREFISSO_TRACK) + String(id) + String(SUFFISSO_TRACK_REC);
 }
 
-// Barra del titolo invertita (sfondo bianco, testo nero) usata dalle
-// pagine di riepilogo
-void barraTitolo(int x, const __FlashStringHelper *testo) {
-  display.fillRect(0, 0, 128, 11, SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_BLACK);
-  display.setCursor(x, 2);
-  display.print(testo);
-  display.setTextColor(SSD1306_WHITE);
+// Legge la definizione di un tracciato dal file. true se il file esiste
+// ed e' valido (stesso doppio controllo dimensione+magic di caricaRecordStorici).
+bool caricaTracciato(int id, Tracciato &out) {
+  File f = LittleFS.open(percorsoTracciato(id), FILE_READ);
+  if (!f) return false;
+
+  Tracciato letto;
+  size_t byteLetti = f.read((uint8_t *)&letto, sizeof(letto));
+  f.close();
+
+  if (byteLetti != sizeof(letto) || letto.magic != MAGIC_TRACCIATO) return false;
+  out = letto;
+  return true;
 }
 
-// Riga della griglia dei riepiloghi: nome della grandezza a sinistra e
-// due valori con mini-etichetta su colonne FISSE (x=42 e x=86). Le
-// colonne sono le stesse su ogni riga e su ogni pagina che la usa
-// (riepilogo di sessione e pagina RECORD): la griglia si impara a
-// leggere una volta sola. Le larghezze sono calcolate sul font 6x8:
-// il caso peggiore ("Fr 0.9*" = 7 caratteri = 42 px a x=86) finisce
-// esattamente al bordo dei 128 px senza tagli.
-// recA/recB accendono l'asterisco "nuovo record"; dove non serve
-// (pagina RECORD) si passa false.
-void rigaDoppia(int y, const __FlashStringHelper *nome,
-                const __FlashStringHelper *lblA, float valA, bool recA,
-                const __FlashStringHelper *lblB, float valB, bool recB,
-                int decimali) {
-  display.setCursor(0, y);
-  display.print(nome);
-
-  display.setCursor(42, y);
-  display.print(lblA);
-  display.print(valA, decimali);
-  if (recA) display.print('*');
-
-  display.setCursor(86, y);
-  display.print(lblB);
-  display.print(valB, decimali);
-  if (recB) display.print('*');
-}
-
-// Prima pagina del riepilogo: massimi di sessione sulla griglia comune,
-// una riga per coppia di canali. Angoli a 0 decimali e G a 1: sull'OLED
-// piu' cifre non si leggono al volo, la precisione piena resta nel CSV.
-// L'asterisco marca i valori che hanno appena battuto il record storico;
-// la legenda in basso compare solo se c'e' almeno un record, altrimenti
-// lascia il posto al suggerimento [tasto].
-void mostraPaginaMassimi() {
-  unsigned long durataSec = (millis() - inizioRegistrazione) / 1000;
-
-  display.clearDisplay();
-  barraTitolo(4, F("MASSIMI SESSIONE 1/2"));
-
-  rigaDoppia(14, F("Piega"),
-             F("Dx "), massimiSessione[C_PIEGA_DX],  nuovoRecord[C_PIEGA_DX],
-             F("Sx "), massimiSessione[C_PIEGA_SX],  nuovoRecord[C_PIEGA_SX], 0);
-  rigaDoppia(24, F("Imp/St"),
-             F("Im "), massimiSessione[C_IMPENNATA], nuovoRecord[C_IMPENNATA],
-             F("St "), massimiSessione[C_STOPPIE],   nuovoRecord[C_STOPPIE], 0);
-  rigaDoppia(34, F("G lat"),
-             F("Dx "), massimiSessione[C_GLAT_DX],   nuovoRecord[C_GLAT_DX],
-             F("Sx "), massimiSessione[C_GLAT_SX],   nuovoRecord[C_GLAT_SX], 1);
-  rigaDoppia(44, F("G lon"),
-             F("Ac "), massimiSessione[C_G_ACCEL],   nuovoRecord[C_G_ACCEL],
-             F("Fr "), massimiSessione[C_G_FRENA],   nuovoRecord[C_G_FRENA], 1);
-
-  // Piede pagina: durata reale della sessione (dal cronometro, non dai
-  // minuti CSV: conta anche il minuto parziale scartato dal log)
-  display.setCursor(0, 56);
-  display.print(F("Durata "));
-  display.print(durataSec / 60); display.print(F("m"));
-  display.print(durataSec % 60); display.print(F("s"));
-
-  bool almenoUnRecord = false;
-  for (int c = 0; c < N_CANALI; c++) almenoUnRecord |= nuovoRecord[c];
-  display.setCursor(80, 56);
-  display.print(almenoUnRecord ? F("* nuovo!") : F(" [tasto]"));
-
-  display.display();
-}
-
-// Seconda pagina del riepilogo: quante volte ogni soglia evento e' stata
-// superata nella sessione appena chiusa. E' un ciclo sulla tabella eventi.
-void mostraPaginaEventi() {
-  display.clearDisplay();
-  barraTitolo(4, F("CONTATORE EVENTI 2/2"));
-
-  for (int e = 0; e < N_EVENTI; e++) {
-    display.setCursor(0, 15 + e * 10);
-    display.print(NOME_EVENTO_OLED[e]);
-    display.print(conteggioEventi[e]);
-  }
-
-  display.display();
-}
-
-// ===========================================================================
-// 13. WIFI E SITO WEB
-// ===========================================================================
-
-// Pagina live (HTML+CSS+JS): il telefono e' collegato
-// all'access point della moto e NON ha internet, quindi niente librerie
-// esterne.
-const char PAGINA_LIVE_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>WheelStat - Telemetria live</title>
-<style>
-/* Tema scuro: si legge meglio col telefono sotto il sole */
-body{font-family:sans-serif;background:#111;color:#eee;margin:12px}
-h2{margin:0 0 8px}
-#rec{color:#f55;font-size:16px}                 /* spia REC rossa */
-.g{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
-.c{background:#1c1c1c;border-radius:8px;padding:8px;text-align:center}
-.e{font-size:11px;color:#999}                   /* etichetta piccola */
-.v{font-size:22px;font-weight:bold}             /* valore grande */
-canvas{width:100%;background:#1c1c1c;border-radius:8px;margin-bottom:10px}
-.l{font-size:12px;color:#999;margin-bottom:2px} /* legenda dei grafici */
-#ev{font-size:13px;text-align:left}
-a{color:#4cf}
-</style></head><body>
-<h2>WheelStat <span id="rec"></span></h2>
-
-<!-- Griglia dei valori istantanei -->
-<div class="g">
-<div class="c"><div class="e">Piega &deg;</div><div class="v" id="vp">--</div></div>
-<div class="c"><div class="e">Imp./Stoppie &deg;</div><div class="v" id="vw">--</div></div>
-<div class="c"><div class="e">Rischio %</div><div class="v" id="vr">--</div></div>
-<div class="c"><div class="e">G laterale</div><div class="v" id="vgl">--</div></div>
-<div class="c"><div class="e">G longitudinale</div><div class="v" id="vgn">--</div></div>
-<div class="c"><div class="e">Aria &deg;C / Umid %</div><div class="v" id="vm">--</div></div>
-</div>
-
-<!-- Grafici scorrevoli: ~36 secondi di storia (120 punti x 300 ms) -->
-<div class="l">Angoli (&plusmn;60&deg;): <span style="color:#4cf">piega</span> /
-<span style="color:#fc4">impennata(+) stoppie(-)</span></div>
-<canvas id="ca" height="130"></canvas>
-<div class="l">Forze G (&plusmn;1.5): <span style="color:#4cf">laterale</span> /
-<span style="color:#fc4">longitudinale</span></div>
-<canvas id="cg" height="130"></canvas>
-
-<div class="c" id="ev">Eventi: --</div>
-<p><a href="/">&larr; Scarica le sessioni dalla memoria</a></p>
-
-<script>
-// Serie storiche dei grafici: N campioni, i piu' vecchi escono a sinistra
-var N=120;
-var sPiega=[],sPitch=[],sLat=[],sLon=[];
-
-// Disegna due serie (a, b) su un canvas: fondo scala +/-max,
-// linea dello zero al centro
-function disegna(id,a,b,max){
- var cv=document.getElementById(id);
- cv.width=cv.clientWidth;             // adatta la risoluzione alla larghezza reale
- var c=cv.getContext('2d'),W=cv.width,H=cv.height;
- c.clearRect(0,0,W,H);
- c.strokeStyle='#333';c.beginPath();c.moveTo(0,H/2);c.lineTo(W,H/2);c.stroke();
- function linea(s,col){
-  c.strokeStyle=col;c.lineWidth=2;c.beginPath();
-  for(var i=0;i<s.length;i++){
-   var x=i*W/(N-1);
-   var y=H/2-(s[i]/max)*(H/2-4);      // scala il valore sull'altezza
-   y=Math.max(2,Math.min(H-2,y));     // niente linee fuori dal riquadro
-   if(i==0)c.moveTo(x,y);else c.lineTo(x,y);
-  }
-  c.stroke();
- }
- linea(a,'#4cf');linea(b,'#fc4');
-}
-
-// Accoda un campione e scarta il piu' vecchio quando la serie e' piena
-function punta(s,v){s.push(v);if(s.length>N)s.shift();}
-
-// Interroga /dati, aggiorna i riquadri e ridisegna i grafici. In caso di
-// errore (WiFi perso, moto spenta) non fa nulla e riprova al giro dopo.
-async function giro(){
- try{
-  var d=await (await fetch('/dati')).json();
-  document.getElementById('vp').textContent=d.piega.toFixed(1);
-  document.getElementById('vw').textContent=d.pitch.toFixed(1);
-  document.getElementById('vr').textContent=d.rischio.toFixed(0);
-  document.getElementById('vgl').textContent=d.glat.toFixed(2);
-  document.getElementById('vgn').textContent=d.glon.toFixed(2);
-  document.getElementById('vm').textContent=d.temp.toFixed(0)+' / '+d.umid.toFixed(0);
-  document.getElementById('rec').textContent=d.rec?('● REC '+d.min+' min'):'';
-  document.getElementById('ev').textContent='Eventi - Impennate: '+d.evi
-   +' | Stoppie: '+d.evs+' | Pieghe: '+d.evp
-   +' | Frenate brusche: '+d.evf+' | Accelerate brusche: '+d.eva;
-  punta(sPiega,d.piega);punta(sPitch,d.pitch);punta(sLat,d.glat);punta(sLon,d.glon);
-  disegna('ca',sPiega,sPitch,60);disegna('cg',sLat,sLon,1.5);
- }catch(e){}
-}
-setInterval(giro,300);  // circa 3 aggiornamenti al secondo
-</script></body></html>
-)rawliteral";
-
-// Accende l'access point e il server web.
-void avviaWiFi() {
-  WiFi.mode(WIFI_AP);
-  wifiAttivo = WiFi.softAP(WIFI_SSID, WIFI_PASSWORD);
-  if (wifiAttivo) {
-    server.begin();
-    Serial.print(F("WiFi acceso -> http://"));
-    Serial.println(WiFi.softAPIP());
-  } else {
-    Serial.println(F("ERRORE: avvio access point fallito."));
-  }
-}
-
-// Spegne server e radio WiFi
-void fermaWiFi() {
-  server.stop();
-  WiFi.softAPdisconnect(true);
-  WiFi.mode(WIFI_OFF);
-  wifiAttivo = false;
-  Serial.println(F("WiFi spento."));
-}
-
-// Radice del sito: elenco dei LOG_n.CSV in memoria, con download e
-// cancellazione. La pagina viene costruita al volo in una String: coi log
-// tipici (pochi KB di HTML)
-void webElencoFile() {
-  String html;
-  html.reserve(2560);  // un blocco unico: meno riallocazioni e frammentazione dello heap
-  html += F("<!DOCTYPE html><html><head><meta charset='utf-8'>"
-    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-    "<title>WheelStat</title><style>body{font-family:sans-serif;background:#111;"
-    "color:#eee;margin:16px}a{color:#4cf}li{margin:8px 0}.x{color:#f55}"
-    "td{padding:2px 14px 2px 0}"
-    ".b{display:inline-block;padding:10px 16px;background:#4cf;color:#000;"
-    "border-radius:8px;text-decoration:none;font-weight:bold}</style></head><body>"
-    "<h2>WheelStat</h2><p><a class='b' href='/live'>Telemetria live</a></p>"
-    "<h3>Sessioni in memoria</h3><ul>");
-
-  // Scorro la radice della flash e tengo solo i file di log
-  int trovati = 0;
-  File radice = LittleFS.open("/");
-  if (radice) {
-    File f = radice.openNextFile();
-    while (f) {
-      String nome = f.name();  // con o senza "/" a seconda del core
-      if (!f.isDirectory() && nome.indexOf("LOG_") >= 0) {
-        html += "<li><a href='/scarica?f=";
-        html += nome; html += "'>"; html += nome; html += "</a> (";
-        html += String(f.size() / 1024.0, 1);
-        html += " KB) &nbsp;<a class='x' href='/elimina?f=";
-        html += nome;
-        html += "' onclick=\"return confirm('Eliminare definitivamente?')\">"
-                "elimina</a></li>";
-        trovati++;
-      }
-      f = radice.openNextFile();
-    }
-    radice.close();
-  }
-  if (trovati == 0) html += F("<li>Nessuna sessione trovata.</li>");
-  html += F("</ul>");
-
-  // Record di sempre: e' la stessa tabella canali del firmware, In fondo i contatori "carriera" e il link di
-  // azzeramento, protetto da confirm(): qui si cancella lo storico
-  // intero, non un singolo file.
-  html += F("<h3>Record di sempre</h3><table>");
-  for (int c = 0; c < N_CANALI; c++) {
-    html += F("<tr><td>");
-    html += NOME_CANALE[c];
-    html += F("</td><td><b>");
-    html += String(recordStorici.canali[c], decimaliCanale(c));
-    html += (c <= C_STOPPIE) ? F("&deg;") : F(" G");
-    html += F("</b></td></tr>");
-  }
-  html += F("</table><p>");
-  html += String(recordStorici.sessioni);
-  html += F(" sessioni registrate, ");
-  html += String(recordStorici.minutiTotali);
-  html += F(" minuti totali. &nbsp;<a class='x' href='/azzera_record' "
-            "onclick=\"return confirm('Azzerare tutti i record storici?')\">"
-            "azzera record</a></p>");
-
-  // Contatore di riempimento: la flash non si estrae, meglio vederlo qui
-  html += F("<p>Memoria: ");
-  html += String(LittleFS.usedBytes() / 1024);
-  html += F(" KB usati su ");
-  html += String(LittleFS.totalBytes() / 1024);
-  html += F(" KB.</p>");
-
-  if (inRegistrazione)
-    html += F("<p>REC in corso: download e cancellazione sono disponibili "
-              "a registrazione ferma.</p>");
-  html += F("</body></html>");
-
-  server.send(200, "text/html", html);
-}
-
-// La pagina live e' statica e sta in flash: send_P la spedisce da li'
-void webLive() {
-  server.send_P(200, "text/html", PAGINA_LIVE_HTML);
-}
-
-// Telemetria istantanea in JSON, interrogata dalla pagina live ogni 300 ms
-void webDati() {
-  char json[280];
-  snprintf(json, sizeof(json),
-    "{\"piega\":%.1f,\"pitch\":%.1f,\"glat\":%.2f,\"glon\":%.2f,"
-    "\"temp\":%.1f,\"umid\":%.0f,\"rischio\":%.0f,\"rec\":%d,\"min\":%lu,"
-    "\"evi\":%u,\"evs\":%u,\"evp\":%u,\"evf\":%u,\"eva\":%u}",
-    piegaLive, pitchLive, forzaGLaterale, forzaGLongitudinale,
-    temperatura, umidita, indiceRischio, inRegistrazione ? 1 : 0,
-    minutiRegistrati,
-    conteggioEventi[EV_IMPENNATA], conteggioEventi[EV_STOPPIE],
-    conteggioEventi[EV_PIEGA], conteggioEventi[EV_FRENATA],
-    conteggioEventi[EV_ACCEL]);
-  server.send(200, "application/json", json);
-}
-
-// Download di un CSV. Bloccato durante la registrazione: lo streaming di
-// un file grosso fermerebbe il loop (e quindi la telemetria) per secondi.
-void webScarica() {
-  if (inRegistrazione) {
-    server.send(503, "text/plain", "Ferma la registrazione prima di scaricare i file.");
-    return;
-  }
-
-  String nome = server.arg("f");
-  if (!nome.startsWith("/")) nome = "/" + nome;
-  // Solo i file di log, niente giri strani nel filesystem
-  if (!nome.startsWith("/LOG_") || nome.indexOf("..") >= 0 || !LittleFS.exists(nome)) {
-    server.send(404, "text/plain", "File non trovato.");
-    return;
-  }
-
-  File f = LittleFS.open(nome, FILE_READ);
+// Scrive la definizione di un tracciato sulla flash (stesso pattern di
+// salvaRecordStorici: si riscrive tutto da capo, costo trascurabile)
+void salvaTracciato(int id, Tracciato &t) {
+  t.magic = MAGIC_TRACCIATO;
+  File f = LittleFS.open(percorsoTracciato(id), FILE_WRITE);
   if (!f) {
-    server.send(500, "text/plain", "Errore di lettura dalla memoria.");
+    Serial.println(F("ERRORE: impossibile salvare il tracciato."));
     return;
   }
-  // Content-Disposition: il browser scarica invece di mostrare il testo
-  server.sendHeader("Content-Disposition", "attachment; filename=" + nome.substring(1));
-  server.streamFile(f, "text/csv");
+  f.write((const uint8_t *)&t, sizeof(t));
   f.close();
 }
 
-// Cancellazione di un CSV
-void webElimina() {
-  if (inRegistrazione) {
-    server.send(503, "text/plain", "Ferma la registrazione prima di eliminare i file.");
-    return;
+// Copia i punti appena raccolti (vedi rilevaGiro, quando il giro chiuso
+// e' il migliore di sessione) nella forma del tracciato attivo e la
+// salva. Aggiorna solo forma+numPuntiForma: il resto della struct
+// (traguardo, nome, record, checkpoint) resta quello gia' in
+// tracciatoCorrente, invariato.
+void salvaFormaTracciato() {
+  tracciatoCorrente.numPuntiForma = numPuntiForma;
+  for (int i = 0; i < numPuntiForma; i++) {
+    tracciatoCorrente.formaLat[i] = formaLat[i];
+    tracciatoCorrente.formaLon[i] = formaLon[i];
   }
-
-  String nome = server.arg("f");
-  if (!nome.startsWith("/")) nome = "/" + nome;
-  if (!nome.startsWith("/LOG_") || nome.indexOf("..") >= 0 || !LittleFS.exists(nome)) {
-    server.send(404, "text/plain", "File non trovato.");
-    return;
-  }
-
-  bool ok = LittleFS.remove(nome);
-  Serial.print(ok ? F("Eliminato ") : F("ERRORE eliminando "));
-  Serial.println(nome);
-
-  // Redirect all'elenco: la pagina si ricarica gia' aggiornata
-  server.sendHeader("Location", "/");
-  server.send(303);
+  salvaTracciato(tracciatoAttivo, tracciatoCorrente);
+  Serial.print(F("Forma del tracciato aggiornata ("));
+  Serial.print(numPuntiForma);
+  Serial.println(F(" punti)."));
 }
 
-// Azzeramento dei record storici. 
-void webAzzeraRecord() {
-  recordStorici = RecordStorici{};  // tutto a zero (la firma la rimette il salvataggio)
-  for (int c = 0; c < N_CANALI; c++) nuovoRecord[c] = false;
-  salvaRecordStorici();
-  Serial.println(F("Record storici azzerati dal sito web."));
-
-  server.sendHeader("Location", "/");
-  server.send(303);
+// Trova il primo id libero per un nuovo tracciato: numerazione
+// progressiva mai riassegnata (stessa idea di avviaRegistrazione() per
+// i LOG_n.CSV), cosi' un id eliminato non si confonde con uno nuovo.
+int primoIdTracciatoLibero() {
+  for (int id = 1; id <= MAX_TRACCIATI; id++) {
+    if (!LittleFS.exists(percorsoTracciato(id))) return id;
+  }
+  return -1;  // tutti gli slot occupati
 }
 
-// ===========================================================================
-// 14. PAGINE OLED
-// ===========================================================================
+// Ripulisce un nome arrivato da web: fuori i caratteri che romperebbero
+// il JSON di /dati o il CSV di riepilogo (virgolette, backslash, virgola,
+// ritorno a capo). Il nome resta leggibile, solo un po' meno "libero"
+// nei simboli.
+void sanitizzaNome(char *nome) {
+  for (int i = 0; nome[i] != '\0'; i++) {
+    char c = nome[i];
+    if (c == '"' || c == '\\' || c == ',' || c == '\n' || c == '\r') nome[i] = '_';
+  }
+}
 
-// Ridisegna da zero la pagina corrente, 10 volte al secondo: barra di
-// stato comune in alto
-void aggiornaDisplay() {
-  if (!oledOk) return;  // niente pannello: inutile disegnare e occupare l'I2C
-
-  display.clearDisplay();
-
-  // Barra di stato: titolo a sinistra, REC/IDLE a destra
-  display.fillRect(0, 0, 128, 11, SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_BLACK);
-  display.setCursor(2, 2);
-  display.print(F("WHEELSTAT"));
-  display.setCursor(94, 2);
-  if (inRegistrazione) {
-    // L'asterisco lampeggia: si vede che registra con la coda dell'occhio
-    if (lampeggioRec) display.print(F("* REC"));
-    else display.print(F("  REC"));
+// Attiva un tracciato: lo carica in RAM, ricarica i suoi record storici e
+// imposta il traguardo per il lap timing. id<0 torna alla modalita'
+// libera (RECORD.BIN globale, traguardo "volante" azzerato). In entrambi
+// i casi i contatori giro ripartono da zero: un tracciato diverso e' una
+// linea diversa, i giri gia' contati non hanno piu' senso.
+void selezionaTracciato(int id) {
+  if (id < 0) {
+    tracciatoAttivo = -1;
+    tracciatoCorrente = Tracciato{};
+    traguardoImpostato = false;
   } else {
-    display.print(F("IDLE "));
-  }
-  display.setTextColor(SSD1306_WHITE);
-
-  switch (schermataCorrente) {
-    case 0: disegnaPiega();            break;
-    case 1: disegnaMeteo();            break;
-    case 2: disegnaForzaG();           break;
-    case 3: disegnaImpennataStoppie(); break;
-    case 4: disegnaRecord();           break;
-    case 5: disegnaMemoria();          break;
-    case 6: disegnaWiFi();             break;
-  }
-
-  display.display();  // spedisce il frame completo al pannello via I2C
-}
-
-// --- Elementi comuni a tutte le pagine live -------------------------------
-// Il linguaggio grafico e' unico: titolo centrato a y=15, riga di
-// separazione a y=24, dati sotto. Le etichette stanno a x=6 e i valori
-// incolonnati a x=54, cosi' ogni pagina si legge allo stesso modo.
-
-// Titolo di pagina centrato + riga di separazione.
-// La x la sceglie il chiamante: (128 - 6 * caratteri) / 2.
-void titoloPagina(int x, const __FlashStringHelper *testo) {
-  display.setTextSize(1);
-  display.setCursor(x, 15);
-  display.print(testo);
-  display.drawFastHLine(10, 24, 108, SSD1306_WHITE);
-}
-
-// Inizia una riga "etichetta / valore": stampa l'etichetta e lascia il
-// cursore sulla colonna dei valori, il chiamante stampa il resto.
-void rigaDato(int y, const __FlashStringHelper *etichetta) {
-  display.setCursor(6, y);
-  display.print(etichetta);
-  display.setCursor(54, y);
-}
-
-// Numero grande centrato col simbolo dei gradi (pagine 0 e 3).
-// Centratura: una cifra sta piu' al centro di due.
-void numeroGrande(int valore) {
-  display.setTextSize(3);
-  if (valore < 10) display.setCursor(45, 30);
-  else display.setCursor(35, 30);
-  display.print(valore);
-  display.setTextSize(1);
-  display.setCursor(75, 30);
-  display.print(F("o"));  // simbolo gradi artigianale
-}
-
-// ---- Pagina 0: angolo di piega -------------------------------------------
-void disegnaPiega() {
-  // Piu' rischio grip = meno piega concessa prima dell'alert
-  float maxPiegaSicura = PIEGA_MAX_TEORICA - (indiceRischio * RIDUZIONE_PIEGA_RISCHIO);
-
-  if (angoloPiega > maxPiegaSicura) {
-    // Banner lampeggiante di pericolo al posto del titolo (ogni 250 ms)
-    if ((millis() / 250) % 2 == 0) {
-      display.fillRoundRect(8, 13, 112, 13, 3, SSD1306_WHITE);
-      display.setTextColor(SSD1306_BLACK);
-      display.setCursor(14, 16);
-      display.print(F("! PERICOLO GRIP !"));
-      display.setTextColor(SSD1306_WHITE);
+    if (!caricaTracciato(id, tracciatoCorrente)) {
+      Serial.println(F("ERRORE: tracciato non trovato o non valido."));
+      return;
     }
-  } else {
-    titoloPagina(19, F("ANGOLO DI PIEGA"));
+    tracciatoAttivo    = id;
+    traguardoLat       = tracciatoCorrente.traguardoLat;
+    traguardoLon       = tracciatoCorrente.traguardoLon;
+    traguardoImpostato = true;
   }
 
-  numeroGrande(constrain((int)angoloPiega, 0, 99));
+  numGiri = 0;
+  giroMigliore = -1;
+  giroInCorso = false;
+  eraFuoriRaggio = true;
+  inizioGiroCorrente = 0;
+  prossimoCheckpoint = 0;
+  inizioSettoreCorrente = 0;
+  numPuntiForma = 0;
+  for (int s = 0; s <= MAX_SETTORI; s++) tempiSettoreMigliori[s] = 0;
 
-  // Barra orizzontale che si riempie dal centro verso l'esterno
-  display.drawRoundRect(4, 56, 120, 6, 2, SSD1306_WHITE);
-  display.drawFastVLine(64, 54, 10, SSD1306_WHITE);  // tacca di zero
+  // Storico canali: quello del tracciato appena attivato, o quello
+  // globale in modalita' libera (la scelta la fa fileRecordAttivo())
+  caricaRecordStorici();
 
-  int offsetBarra = map((int)angoloPiega, 0, 60, 0, 58);
-  offsetBarra = constrain(offsetBarra, 0, 56);
-  display.fillRect(64 - offsetBarra, 58, offsetBarra * 2, 2, SSD1306_WHITE);
+  Serial.print(F("Tracciato attivo: "));
+  if (id < 0) Serial.println(F("nessuno (modalita' libera)"));
+  else Serial.println(tracciatoCorrente.nome);
 }
 
-// ---- Pagina 1: meteo e rischio grip ---------------------------------------
-void disegnaMeteo() {
-  titoloPagina(28, F("METEO E GRIP"));
+// Confronta il giro migliore di questa sessione con il record di sempre
+// del tracciato attivo, e lo salva se e' stato battuto. Senza tracciato
+// selezionato non c'e' nulla da confrontare: in modalita' libera il giro
+// migliore resta solo di sessione, si perde alla REC successiva.
+void aggiornaRecordGiroTracciato() {
+  if (tracciatoAttivo < 0 || giroMigliore < 0) return;
 
-  rigaDato(30, F("Aria"));
-  display.print(temperatura, 1);
-  display.print(F(" C"));
-
-  rigaDato(41, F("Umidita"));
-  display.print((int)umidita);
-  display.print(F(" %"));
-
-  rigaDato(52, F("Rischio"));
-  display.print((int)indiceRischio);
-  display.print(F(" %"));
-}
-
-// ---- Pagina 2: G-meter con radar 2D ---------------------------------------
-void disegnaForzaG() {
-  titoloPagina(43, F("FORZA G"));
-
-  // Numeri a sinistra (Lat in assoluto, Long con segno)...
-  display.setCursor(6, 34);
-  display.print(F("Lat :"));
-  display.print(fabsf(forzaGLaterale), 1);
-
-  display.setCursor(6, 48);
-  display.print(F("Long:"));
-  display.print(forzaGLongitudinale, 1);
-
-  // ...e radar a destra: cerchio con mirino, come i G-meter da auto
-  int cx = 95;
-  int cy = 45;
-  int r = 16;
-
-  display.drawCircle(cx, cy, r, SSD1306_WHITE);
-  display.drawFastHLine(cx - 18, cy, 37, SSD1306_WHITE);
-  display.drawFastVLine(cx, cy - 18, 37, SSD1306_WHITE);
-
-  // Pallino che si sposta col vettore G, confinato dentro al radar.
-  // 14 pixel = 1 G circa: su strada e' raro uscire dal cerchio.
-  int dotX = cx + (int)(forzaGLaterale * 14);
-  int dotY = cy - (int)(forzaGLongitudinale * 14);
-  dotX = constrain(dotX, cx - 14, cx + 14);
-  dotY = constrain(dotY, cy - 14, cy + 14);
-
-  display.fillCircle(dotX, dotY, 3, SSD1306_WHITE);
-}
-
-// ---- Pagina 3: impennata e stoppie ----------------------------------------
-void disegnaImpennataStoppie() {
-  // Stessa pagina per le due manovre: etichetta e numero grande seguono
-  // quella in corso (muso su = impennata, muso giu' = stoppie)
-  bool inStoppie = angoloStoppie > angoloImpennata;
-  float angoloAttivo = inStoppie ? angoloStoppie : angoloImpennata;
-
-  if (inStoppie) titoloPagina(43, F("STOPPIE"));
-  else titoloPagina(37, F("IMPENNATA"));
-
-  int valAngolo = constrain((int)angoloAttivo, 0, 99);
-  numeroGrande(valAngolo);
-
-  // Colonna laterale con lo zero al centro: si riempie verso l'alto in
-  // impennata e verso il basso in stoppie
-  display.drawRoundRect(110, 28, 10, 34, 2, SSD1306_WHITE);
-  display.drawFastHLine(108, 45, 14, SSD1306_WHITE);  // tacca di zero
-
-  int altezzaBarra = map(valAngolo, 0, 45, 0, 15);
-  altezzaBarra = constrain(altezzaBarra, 0, 15);
-  if (inStoppie) display.fillRect(112, 46, 6, altezzaBarra, SSD1306_WHITE);
-  else display.fillRect(112, 45 - altezzaBarra, 6, altezzaBarra, SSD1306_WHITE);
-}
-
-// ---- Pagina 4: record storici -----------------------------------------------
-// I migliori di sempre
-void disegnaRecord() {
-  titoloPagina(46, F("RECORD"));
-
-  rigaDoppia(27, F("Piega"),
-             F("Dx "), recordStorici.canali[C_PIEGA_DX],  false,
-             F("Sx "), recordStorici.canali[C_PIEGA_SX],  false, 0);
-  rigaDoppia(36, F("Imp/St"),
-             F("Im "), recordStorici.canali[C_IMPENNATA], false,
-             F("St "), recordStorici.canali[C_STOPPIE],   false, 0);
-  rigaDoppia(45, F("G lat"),
-             F("Dx "), recordStorici.canali[C_GLAT_DX],   false,
-             F("Sx "), recordStorici.canali[C_GLAT_SX],   false, 1);
-  rigaDoppia(54, F("G lon"),
-             F("Ac "), recordStorici.canali[C_G_ACCEL],   false,
-             F("Fr "), recordStorici.canali[C_G_FRENA],   false, 1);
-}
-
-// ---- Pagina 5: diagnostica memoria flash ------------------------------------
-void disegnaMemoria() {
-  titoloPagina(43, F("MEMORIA"));
-
-  // Spazio libero sulla partizione LittleFS, il dato che conta davvero
-  rigaDato(30, F("Flash"));
-  if (memoriaOk) {
-    display.print((LittleFS.totalBytes() - LittleFS.usedBytes()) / 1024);
-    display.print(F(" KB lib."));
-  } else {
-    display.print(F("ERRORE!"));
-  }
-
-  if (inRegistrazione) {
-    rigaDato(41, F("File"));
-    display.print(nomeFileLog + 1);  // +1 salta la "/" iniziale
-
-    rigaDato(52, F("Minuti"));
-    display.print(minutiRegistrati);
-  } else {
-    rigaDato(41, F("Stato"));
-    display.print(F("IN PAUSA"));
-
-    rigaDato(52, F("Avvio"));
-    display.print(F("tasto [LOG]"));
-  }
-}
-
-// ---- Pagina 6: WiFi e telemetria dal telefono -------------------------------
-void disegnaWiFi() {
-  titoloPagina(52, F("WIFI"));
-
-  rigaDato(29, F("Rete"));
-  display.print(WIFI_SSID);
-
-  if (wifiAttivo) {
-    // WiFi acceso: tutto quello che serve per collegarsi (righe piu'
-    // fitte del solito: qui i dati sono quattro)
-    rigaDato(38, F("Pass"));
-    display.print(WIFI_PASSWORD);
-
-    rigaDato(47, F("Sito"));
-    display.print(WiFi.softAPIP());
-
-    rigaDato(56, F("Client"));
-    display.print(WiFi.softAPgetStationNum());
-    display.print(F("  [OK] off"));
-  } else {
-    rigaDato(41, F("Stato"));
-    display.print(F("SPENTO"));
-
-    rigaDato(52, F("Avvio"));
-    display.print(F("tasto [OK]"));
+  unsigned long migliore = tempiGiro[giroMigliore];
+  if (tracciatoCorrente.migliorGiroMs == 0 || migliore < tracciatoCorrente.migliorGiroMs) {
+    tracciatoCorrente.migliorGiroMs = migliore;
+    salvaTracciato(tracciatoAttivo, tracciatoCorrente);
+    Serial.println(F("Nuovo giro record per questo tracciato."));
   }
 }
 
@@ -1645,7 +1694,7 @@ void disegnaWiFi() {
 // 15. DEBUG SU SERIAL MONITOR
 // ===========================================================================
 
-// Telemetria ogni 5 secondi, senza di questa è impossibile fare debug
+// Telemetria ogni 5 secondi, senza di questa e' impossibile fare debug
 void stampaSeriale() {
   Serial.println(F("---- TELEMETRIA LIVE ----"));
   Serial.print(F("Piega    : ")); Serial.print(angoloPiega);     Serial.println(F(" deg"));
@@ -1655,6 +1704,32 @@ void stampaSeriale() {
   Serial.print(F(" | G_Lon: "));  Serial.println(forzaGLongitudinale);
   Serial.print(F("Meteo    : ")); Serial.print(temperatura);
   Serial.print(F(" C / "));       Serial.print(umidita); Serial.println(F(" %"));
+
+  Serial.print(F("GPS      : "));
+  if (gpsFixValido) {
+    Serial.print(F("fix OK, "));
+    Serial.print(velocitaGPS, 0); Serial.print(F(" km/h, "));
+    Serial.print(satellitiGPS);   Serial.print(F(" sat, "));
+    Serial.print(latitudineGPS, 5); Serial.print(F(", "));
+    Serial.println(longitudineGPS, 5);
+  } else {
+    Serial.print(F("NESSUN FIX ("));
+    Serial.print(satellitiGPS);
+    Serial.println(F(" sat agganciati)"));
+  }
+
+  Serial.print(F("Giri     : "));
+  if (!traguardoImpostato) {
+    Serial.println(F("traguardo non impostato"));
+  } else {
+    Serial.print(numGiri); Serial.print(F(" completati"));
+    if (giroMigliore >= 0) {
+      Serial.print(F(", migliore "));
+      Serial.print(tempiGiro[giroMigliore] / 1000.0, 2);
+      Serial.print('s');
+    }
+    Serial.println();
+  }
 
   // Contatori eventi, tutti su una riga
   Serial.print(F("Eventi   : "));
@@ -1666,16 +1741,11 @@ void stampaSeriale() {
   }
   Serial.println();
 
-  if (bnoOk) {
-    uint8_t calSys, calGyro, calAcc, calMag;
-    bno.getCalibration(&calSys, &calGyro, &calAcc, &calMag);
-    Serial.print(F("Calibraz.: SYS=")); Serial.print(calSys);
-    Serial.print(F(" GYRO="));          Serial.print(calGyro);
-    Serial.print(F(" ACC="));           Serial.print(calAcc);
-    Serial.print(F(" MAG="));           Serial.print(calMag);
-    Serial.println(F("  (0=no, 3=ok)"));
-  } else {
-    Serial.println(F("Calibraz.: IMU ASSENTE"));
-  }
+  // Il dettaglio della calibrazione lo stampa il driver: quali contatori
+  // esistano dipende dal chip (il BNO055 ne ha quattro, un altro puo'
+  // averne uno solo o nessuno). Qui si sa solo che c'e' una riga da
+  // stampare.
+  if (bnoOk) imuStampaCalibrazione();
+  else       Serial.println(F("Calibraz.: IMU ASSENTE"));
   Serial.println(F("-------------------------"));
 }
