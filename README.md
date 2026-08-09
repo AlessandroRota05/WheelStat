@@ -35,6 +35,12 @@ Tutto si vede su un **OLED 128×64** a 10 pagine con 4 pulsanti e su un **sito s
 | 8 | **Memoria** | Spazio libero, file in scrittura, minuti registrati | - |
 | 9 | **WiFi** | SSID, password, indirizzo del sito, client collegati | Accende/spegne l'AP |
 
+![InterfacciaOled](Media/interfacciaOled.png)
+![InterfacciaOled](Media/interfacciaOled1.png)
+![InterfacciaOled](Media/interfacciaOled2.png)
+![InterfacciaOled](Media/InterfacciaOled3.png)
+![InterfacciaOled](Media/InterfacciaOled4.png)
+
 Una barra fissa in cima mostra `REC` durante la registrazione e lo stato del GPS se il lap timing è attivo.
 
 **All'avvio** il firmware elenca i cinque componenti mentre li accende, col nome del driver e una spunta o una croce. Sono controlli reali (ACK I2C per OLED e IMU, lettura forzata per il DHT22, ascolto NMEA per il GPS, mount per la flash), quindi un componente scollegato prende una croce. Segue la **calibrazione del magnetometro** (l'otto da percorrere con la scatola in mano), saltabile con OK.
