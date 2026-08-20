@@ -79,7 +79,7 @@ Il firmware gira su tutta la famiglia. La piedinatura si adegua da sola alla boa
 Tre cose da sapere:
 
 - **C3 e S2 hanno due sole UART** e la 0 è quella del monitor seriale, quindi al GPS resta la 1 (già impostato).
-- **Sul C3 il firmware occupa il 90% della flash**: è il core RISC-V. Ci sta, ma restano ~120 KB di margine.
+- **Sul C3 il firmware occupa il 90% della flash**
 - Un chip della famiglia non previsto (C6, H2) dà un errore di compilazione: aggiungi il suo blocco in [Config.h](Config.h) copiando il più simile. Fuori dalla famiglia Espressif servirebbe un porting (`WiFi.h`, `WebServer.h` e LittleFS nativi esistono solo lì).
 
 <a id="it-build"></a>
@@ -287,7 +287,7 @@ The firmware runs on the whole family. The pinout follows the board selected in 
 Three things to know:
 
 - **C3 and S2 have only two UARTs** and UART 0 is the serial monitor, so the GPS gets UART 1 (already set).
-- **On the C3 the firmware fills 90% of the flash**: the RISC-V core. It fits, but leaves ~120 KB of headroom.
+- **On the C3 the firmware fills 90% of the flash**: the RISC-V core.
 - A family chip that isn't listed (C6, H2) fails to compile: add its block in [Config.h](Config.h) by copying the closest one. Outside the Espressif family it would be a port (native `WiFi.h`, `WebServer.h` and LittleFS only exist there).
 
 <a id="en-build"></a>
