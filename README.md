@@ -6,6 +6,9 @@
 
 > **Seleziona la lingua / Select your language:** [🇮🇹 Italiano](#italiano) · [🇬🇧 English](#english)
 
+<video src="https://github.com/user-attachments/assets/7b796619-36bd-4502-a876-5ac1e82d2781" controls width="100%">
+  Il tuo browser non supporta il tag video.
+</video>
 ---
 
 <a id="italiano"></a>
