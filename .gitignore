@@ -1,0 +1,19 @@
+# PlatformIO build output and downloaded libraries
+.pio/
+
+# Arduino IDE "Export Compiled Binary" and compiled firmware
+build/
+*.bin
+*.elf
+
+# Editor settings
+.vscode/
+.idea/
+
+# Python caches (tools/)
+__pycache__/
+
+# Files the operating system leaves around
+Thumbs.db
+desktop.ini
+.DS_Store

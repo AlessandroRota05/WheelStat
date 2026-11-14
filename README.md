@@ -2,138 +2,192 @@
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)
 ![Platform](https://img.shields.io/badge/platform-ESP32-orange.svg)
-![Firmware](https://img.shields.io/badge/firmware-v9.16-green.svg)
+![Firmware](https://img.shields.io/badge/firmware-v11.0-green.svg)
 
-> **Seleziona la lingua / Select your language:** [🇮🇹 Italiano](#italiano) · [🇬🇧 English](#english)
+**[🇮🇹 Italiano](#italiano) · [🇬🇧 English](#english)**
 
 <video src="https://github.com/user-attachments/assets/7b796619-36bd-4502-a876-5ac1e82d2781" controls width="100%">
   Il tuo browser non supporta il tag video.
 </video>
+
 ---
 
 <a id="italiano"></a>
 ## 🇮🇹 Italiano
 
-Telemetria per moto su **ESP32**. Un'IMU **BNO055** misura angolo di piega, impennata/stoppie e forze G; un **DHT22** legge temperatura e umidità e ne ricava un indice di rischio grip; un **GPS NEO-6M/8M** aggiunge velocità, posizione e cronometraggio dei giri.
+**Telemetria per moto su ESP32.** Misura piega, impennata, forze G, velocità e tempi sul giro; li mostra su un piccolo OLED e su un sito che l'ESP32 serve da solo al telefono, senza internet e senza app.
 
-Tutto si vede su un **OLED 128×64** a 10 pagine con 4 pulsanti e su un **sito servito dall'ESP32 stesso** (il telefono si collega al suo access point, senza internet). Ogni sessione si registra in **CSV sulla flash interna**.
+[Cosa fa](#it-cosa) · [Cosa serve](#it-hardware) · [Avvio rapido](#it-avvio) · [Orientamento dell'IMU](#it-orientamento) · [Display](#it-oled) · [Sito](#it-web) · [Giri e tracciati](#it-giri) · [Misure](#it-misure) · [Dati](#it-file) · [Altre schede e componenti](#it-driver) · [Sviluppo](#it-sviluppo) · [Sicurezza](#it-sicurezza)
 
-[Interfaccia OLED](#it-oled) · [Cablaggio](#it-hardware) · [Quale ESP32](#it-schede) · [Compilare](#it-build) · [**Orientamento dell'IMU**](#it-orientamento) · [Cosa misura](#it-misure) · [Giri e tracciati](#it-giri) · [Sito](#it-web) · [File](#it-file) · [Componenti sostituibili](#it-driver) · [Sicurezza](#it-sicurezza)
+<a id="it-cosa"></a>
+### Cosa fa
 
-<a id="it-oled"></a>
-### Interfaccia OLED
+- **Piega, impennata/stoppie e forze G** da un'IMU BNO055, con un filtro che scarta gli urti delle buche.
+- **Velocità, posizione e cronometro sul giro** da un GPS a 5 Hz: traguardo e fino a due intertempi, con il **delta in tempo reale** sul tuo giro migliore.
+- **Rischio grip** stimato da temperatura e umidità, che abbassa la soglia dell'allarme di piega.
+- **Registrazione sulla flash interna**, tre campioni al secondo: circa cinque ore, senza scheda SD.
+- **Sito sul telefono**: telemetria live, grafici e mappa di ogni sessione, confronto tra sessioni, tracciati salvati, download in CSV e GPX, impostazioni e aggiornamento del firmware via WiFi.
+- **Interfaccia in italiano o in inglese**, scelta alla compilazione.
 
-**SU/GIÙ** scorrono le pagine, **LOG** avvia e ferma la registrazione, **OK** cambia funzione a seconda della pagina.
+<p align="center">
+  <img src="Media/oled/it/pages.gif" width="420" alt="Le pagine del display, una dopo l'altra">
+</p>
 
-| # | Pagina | Contenuto | Tasto OK |
-|---|---|---|---|
-| 0 | **Piega** | Angolo di inclinazione, numero grande e barra dal centro. Banner di allarme oltre la soglia di sicurezza, che si abbassa quando sale il rischio grip | Taratura zero |
-| 1 | **Meteo** | Temperatura, umidità, rischio grip | - |
-| 2 | **Forza G** | G laterale e longitudinale, con radar 2D | - |
-| 3 | **Impennata / Stoppie** | Angolo di beccheggio, colonna verticale | Taratura zero |
-| 4 | **GPS** | Stato del fix, velocità, posizione, satelliti | - |
-| 5 | **Giri** | Distanza dal prossimo obiettivo, giro in corso, ultimo, record | Imposta il traguardo |
-| 6 | **Record 1/2** | Migliori di sempre: piega, impennata/stoppie, G laterali | - |
-| 7 | **Record 2/2** | Migliori di sempre: G longitudinali, velocità | - |
-| 8 | **Memoria** | Spazio libero, file in scrittura, minuti registrati | - |
-| 9 | **WiFi** | SSID, password, indirizzo del sito, client collegati | Accende/spegne l'AP |
-
-![InterfacciaOled](Media/interfacciaOled.png)
-![InterfacciaOled](Media/interfacciaOled1.png)
-![InterfacciaOled](Media/interfacciaOled2.png)
-![InterfacciaOled](Media/InterfacciaOled3.png)
-![InterfacciaOled](Media/InterfacciaOled4.png)
-
-Una barra fissa in cima mostra `REC` durante la registrazione e lo stato del GPS se il lap timing è attivo.
-
-**All'avvio** il firmware elenca i cinque componenti mentre li accende, col nome del driver e una spunta o una croce. Sono controlli reali (ACK I2C per OLED e IMU, lettura forzata per il DHT22, ascolto NMEA per il GPS, mount per la flash), quindi un componente scollegato prende una croce. Segue la **calibrazione del magnetometro** (l'otto da percorrere con la scatola in mano), saltabile con OK.
+![Il sito sul telefono: live, grafici di una sessione, tracciati](Media/web/it/overview.png)
 
 <a id="it-hardware"></a>
-### Cablaggio
+### Cosa serve
 
-Pin dell'**ESP32 classico** (DevKit V1). Per S3/S2/C3 vedi [Quale ESP32](#it-schede).
-
-| Componente | Bus / Segnale | Pin | Note |
+| Componente | Collegamento | Pin (ESP32 DevKit V1) | Note |
 |---|---|---|---|
-| OLED SSD1306 | I2C SDA / SCL | 21 / 22 | Indirizzo `0x3C` |
-| Bosch BNO055 | I2C SDA / SCL | 21 / 22 | Indirizzo `0x28` (`0x29` su alcuni breakout) |
-| DHT22 | GPIO | 4 | Linea dati singola |
-| GPS NEO-6M/8M | UART2 | 16 (RX) / 17 (TX) | 9600 baud. **Il TX del modulo va su GPIO 16** |
-| Pulsanti SU / GIÙ / OK / LOG | GPIO | 13 / 25 / 14 / 27 | `INPUT_PULLUP`, verso GND |
+| ESP32 DevKit V1 | - | - | Anche S3, S2, C3: vedi [sotto](#it-driver) |
+| IMU Bosch BNO055 | I2C | SDA 21 / SCL 22 | Indirizzo `0x28` (`0x29` su alcuni breakout) |
+| OLED SSD1306 128×64 | I2C | SDA 21 / SCL 22 | Indirizzo `0x3C` |
+| DHT22 | GPIO | 4 | Temperatura e umidità |
+| GPS u-blox NEO-6M / 8M | UART2 | RX 16 / TX 17 | 9600 baud. **Il TX del modulo va su GPIO 16** |
+| 4 pulsanti SU / GIÙ / OK / LOG | GPIO | 13 / 25 / 14 / 27 | Verso GND, nessuna resistenza |
 
-**Bill of materials:** ESP32 DevKit V1 · Bosch BNO055 breakout · DHT22 · OLED SSD1306 I2C 128×64 · GPS u-blox NEO-6M o NEO-8M con antenna · 4 pulsanti tattili (spesso già sul modulo display) · cavi dupont · alimentazione USB.
+Alimentazione da USB. Pin e indirizzi stanno tutti in [Config.h](Config.h).
 
-Pin e indirizzi stanno tutti in [Config.h](Config.h).
+![Schema dei collegamenti](Media/hardware/wiring_it.svg)
 
-<a id="it-schede"></a>
-### Quale ESP32
+<details>
+<summary>Il prototipo su breadboard</summary>
 
-Il firmware gira su tutta la famiglia. La piedinatura si adegua da sola alla board selezionata nell'IDE: non c'è nessuna macro da impostare.
+![Prototipo su breadboard](Media/hardware/prototipo.jpg)
 
-| Chip | Stato | SU/GIÙ/OK/LOG | DHT | SDA/SCL | GPS RX/TX | UART | Flash |
-|---|---|---|---|---|---|---|---|
-| **ESP32** (DevKit V1) | montato | 13 / 25 / 14 / 27 | 4 | 21 / 22 | 16 / 17 | 2 | 82 % |
-| **ESP32-S3** | 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 2 | 81 % |
-| **ESP32-S2** | 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 1 | 78 % |
-| **ESP32-C3** | 🔧 | 3 / 4 / 5 / 6 | 10 | 8 / 9 | 0 / 1 | 1 | **90 %** |
+</details>
 
-🔧 = compila e rispetta i vincoli del chip, ma **non è mai stata cablata**: confrontala con la serigrafia della tua board prima di saldare. Solo il classico è provato su hardware.
+<a id="it-avvio"></a>
+### Avvio rapido
 
-Tre cose da sapere:
+1. **Apri lo sketch.** In Arduino IDE apri `WheelStat.ino`; la cartella deve chiamarsi esattamente `WheelStat`. Serve il core **esp32** di Espressif (3.x).
+2. **Installa le librerie** dal Gestore librerie: `Adafruit BNO055`, `Adafruit SSD1306`, `Adafruit GFX Library`, `Adafruit Unified Sensor`, `DHT sensor library`, `TinyGPSPlus`.
+3. **Scegli la lingua** in [Config.h](Config.h): `LANG_IT` oppure `LANG_EN`.
+4. **Carica** sulla scheda. Monitor seriale a 115200.
+5. **Controlla l'avvio.** Il display elenca i cinque componenti con una spunta o una croce: sono controlli veri, un componente scollegato prende la croce. Poi chiede di calibrare il magnetometro muovendo la scatola a otto (OK per saltare).
+6. **Controlla l'orientamento dell'IMU** prima di fidarti dei numeri: è il [paragrafo qui sotto](#it-orientamento).
 
-- **C3 e S2 hanno due sole UART** e la 0 è quella del monitor seriale, quindi al GPS resta la 1 (già impostato).
-- **Sul C3 il firmware occupa il 90% della flash**
-- Un chip della famiglia non previsto (C6, H2) dà un errore di compilazione: aggiungi il suo blocco in [Config.h](Config.h) copiando il più simile. Fuori dalla famiglia Espressif servirebbe un porting (`WiFi.h`, `WebServer.h` e LittleFS nativi esistono solo lì).
+<p align="center">
+  <img src="Media/oled/it/boot.gif" width="32%" alt="Logo all'accensione">
+  <img src="Media/oled/it/boot_checklist.png" width="32%" alt="Controllo dei componenti">
+  <img src="Media/oled/it/boot_calibration.png" width="32%" alt="Calibrazione del magnetometro">
+</p>
 
-<a id="it-build"></a>
-### Compilare
-
-Sketch Arduino IDE. **I file `.ino` devono stare nella stessa cartella, chiamata esattamente `WheelStat`.** Monitor seriale a **115200**.
-
-Librerie da installare: `Adafruit BNO055` · `Adafruit SSD1306` · `Adafruit GFX Library` · `DHT sensor library` · `Adafruit Unified Sensor` · `TinyGPSPlus`. `Wire`, `WiFi`, `WebServer` e `LittleFS` arrivano col core ESP32.
+Da riga di comando:
 
 ```bash
 arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 .
 ```
 
+Con **PlatformIO** (VS Code) c'è un [platformio.ini](platformio.ini) pronto che scarica le librerie da solo: `pio run -t upload`. Serve Python tra 3.10 e 3.14.
+
 <a id="it-orientamento"></a>
-### Orientamento dell'IMU: da fare per prima su una scatola nuova
+### Orientamento dell'IMU
 
-**Sbagliarlo non dà nessun errore: dà telemetria plausibile e sbagliata.** Va provato con la scatola in mano. Due passaggi, entrambi in [Config.h](Config.h).
+**Sbagliarlo non dà nessun errore: dà telemetria plausibile e sbagliata.** Va fatto una volta, con la scatola in mano, in [Config.h](Config.h).
 
-**Passo 1, la posizione.** Come è girata la basetta dell'IMU; il riferimento è la faccia dei componenti. Scommenta **una** riga:
+**1. La posizione della basetta.** Scommenta una riga sola:
 
 ```cpp
-#define IMU_MONTAGGIO_SOTTOSOPRA  // montato: basetta capovolta
-// #define IMU_MONTAGGIO_DRITTA   // componenti in su, basetta in piano
-// #define IMU_MONTAGGIO_MANUALE  // nessuna delle due: scegli tu P0...P7
+#define IMU_MOUNT_UPSIDE_DOWN   // basetta capovolta (com'è montata la mia)
+// #define IMU_MOUNT_UPRIGHT    // componenti in su, basetta in piano
+// #define IMU_MOUNT_MANUAL     // nessuna delle due: scegli tu tra P0...P7
 ```
 
-Il BNO055 ha otto orientamenti predefiniti (P0…P7) e li applica nel chip. Per una posizione insolita si accende `IMU_MONTAGGIO_MANUALE` e si prova un'altra P.
+**2. I versi.** Accendi, muovi la scatola e controlla. Ogni riga sbagliata si corregge invertendo un segno:
 
-**Passo 2, i versi.** Accendi, muovi la scatola, controlla. Ogni riga sbagliata si corregge invertendo un segno:
-
-| Muovi la scatola così | Deve succedere | Se è al contrario inverti |
+| Muovi la scatola | Deve succedere | Se è al contrario |
 |---|---|---|
-| Inclinala a **destra** | sale `Piega Dx` (pagina 0) | `SEGNO_PIEGA` |
-| Alza il **davanti** | sale `Impennata`, non `Stoppie` (pagina 3) | `SEGNO_IMPENNATA` |
-| Spingila in **avanti** | `Long` positivo, pallino in **alto** (pagina 2) | `SEGNO_G_LONG` |
-| Spingila a **sinistra** | pallino a **sinistra** (pagina 2) | `SEGNO_G_LAT` |
+| Inclinala a **destra** | la piega sale (pagina 0) | inverti `SIGN_LEAN` |
+| Alza il **davanti** | compare `IMPENNATA`, non `STOPPIE` (pagina 3) | inverti `SIGN_PITCH` |
+| Spingila in **avanti** | `Long` positivo, pallino in **alto** (pagina 2) | inverti `SIGN_G_LONG` |
+| Spingila a **sinistra** | pallino a **sinistra** (pagina 2) | inverti `SIGN_G_LAT` |
 
-> Se trovi due grandezze **scambiate** (la piega si muove quando alzi il muso) non è un segno: è il passo 1 da rifare. I `SEGNO_*` invertono un verso, non scambiano due assi.
+Se due grandezze sono **scambiate** (la piega si muove quando alzi il muso) non è un segno: è il passo 1 da rifare.
 
-**Taratura zero** (tasto OK sulle pagine 0 e 3, da fermi e in piano): compensa il montaggio non in bolla. Vive in RAM, si rifà a ogni accensione.
+Sulla moto, da fermo e in piano, **OK sulla pagina 0 o 3** azzera piega e beccheggio per compensare un montaggio non in bolla. Va rifatto a ogni accensione.
+
+<a id="it-oled"></a>
+### Display
+
+**SU/GIÙ** scorrono le pagine, **LOG** avvia e ferma la registrazione, **OK** fa una cosa diversa per pagina. La barra in alto mostra `REC` mentre registra e `SAT` (o `SAT!` senza fix) quando c'è un traguardo; il tratto spesso sulla linea sotto il titolo dice in quale delle dieci pagine sei.
+
+| # | Pagina | Cosa mostra | Tasto OK |
+|---|---|---|---|
+| 0 | **Piega** | Angolo di piega con il lato (freccia) e una barra che cresce da quella parte. Le due tacche sulla barra sono la soglia dell'allarme, che si stringe quando sale il rischio grip; oltre, il titolo diventa un avviso lampeggiante | Azzera |
+| 1 | **Meteo** | Temperatura, umidità, rischio grip con barra | - |
+| 2 | **Forza G** | G laterale e longitudinale, con mirino (l'anello interno è 0,5 G) | - |
+| 3 | **Impennata / Stoppie** | Angolo di beccheggio | Azzera |
+| 4 | **GPS** | Stato del fix, velocità, posizione, satelliti | - |
+| 5 | **Giri** | Delta sul giro di riferimento (in negativo, testo scuro su fondo acceso, quando sei avanti), giro in corso col numero, ultimo, migliore | Segna il traguardo qui |
+| 6-7 | **Record** | I massimi di sempre, per tracciato | - |
+| 8 | **Memoria** | Spazio libero, file in scrittura, minuti | - |
+| 9 | **WiFi** | Nome della rete, password, indirizzo del sito | Accende/spegne il WiFi |
+
+![Le dieci pagine del display](Media/oled/it/pages.png)
+
+<p align="center">
+  <img src="Media/oled/it/page_0_lean_alert.png" width="32%" alt="Allarme di piega">
+  <img src="Media/oled/it/page_5_laps_behind.png" width="32%" alt="Giri, in ritardo sul riferimento">
+  <img src="Media/oled/it/popup_finish.png" width="32%" alt="Traguardo segnato">
+</p>
+
+Fermando una registrazione compaiono tre schermate di riepilogo: massimi, durata, eventi. Un asterisco segna i record appena battuti.
+
+<p align="center">
+  <img src="Media/oled/it/summary_1.png" width="32%" alt="Riepilogo 1/3">
+  <img src="Media/oled/it/summary_2.png" width="32%" alt="Riepilogo 2/3">
+  <img src="Media/oled/it/summary_3.png" width="32%" alt="Riepilogo 3/3">
+</p>
+
+Le immagini del display sono generate dal codice vero delle schermate, compilato sul PC: `tools/oled-preview/build.ps1` le rifà dopo una modifica.
+
+<a id="it-web"></a>
+### Sito
+
+Sulla pagina **WiFi** premi OK: l'ESP32 crea la sua rete. Collega il telefono alla rete `WheelStat` con la password che leggi sul display e apri **`http://192.168.4.1`**.
+
+**La password non è nel codice.** Ogni dispositivo se ne inventa una la prima volta che accende il WiFi e la mostra sul display. Nome e password si cambiano dalle Impostazioni (fino a 12 caratteri, perché devono stare su una riga del display).
+
+| Pagina | Cosa fa |
+|---|---|
+| **Sessioni** | Elenco delle registrazioni: grafici, download in CSV o GPX, elimina |
+| **Grafici** | Una sessione: percorso colorato per piega, poi velocità, piega, impennata e forze G. Scegli un giro e scorri un grafico col dito per leggere i valori in quel punto |
+| **Live** | Telemetria in tempo reale, percorso, delta sul giro |
+| **Tracciati** | Crea e scegli i tracciati, intertempi, record, classifica |
+| **Confronta** | Due sessioni affiancate, giro per giro |
+| **Impostazioni** | Rete WiFi, campioni al secondo, soglie degli eventi, allarme di piega, aggiornamento del firmware |
+
+La pagina Live dice se la connessione è caduta: senza, gli ultimi valori ricevuti resterebbero a schermo come se fossero attuali.
+
+<p align="center">
+  <img src="Media/web/it/sessions.png" width="24%" alt="Sessioni">
+  <img src="Media/web/it/session.png" width="24%" alt="Grafici di una sessione">
+  <img src="Media/web/it/compare.png" width="24%" alt="Confronto">
+  <img src="Media/web/it/settings.png" width="24%" alt="Impostazioni">
+</p>
+
+Durante una registrazione grafici, download e impostazioni sono bloccati: servire un file grande fermerebbe la telemetria.
+
+**Aggiornare senza cavo.** Dalle Impostazioni carichi un nuovo firmware via WiFi: il file è `WheelStat.ino.bin` (Arduino IDE: *Sketch → Esporta sketch compilato*; PlatformIO: `.pio/build/esp32/firmware.bin`). Un file che non è un firmware per lo stesso chip viene rifiutato prima di scrivere, e quello in uso resta al suo posto finché il nuovo non è arrivato intero. Sessioni, tracciati e impostazioni restano.
+
+<a id="it-giri"></a>
+### Giri e tracciati
+
+Fermati sul traguardo con il GPS agganciato e premi **OK sulla pagina Giri**, oppure crea un **tracciato** dal sito dandogli un nome: così traguardo, giro di riferimento e record restano salvati.
+
+- **Il traguardo è una linea** di traverso alla pista, larga 20 m per lato. Tu segni solo il punto: il verso di marcia lo impara al primo passaggio sopra i 15 km/h e lo conferma al secondo. Da lì i passaggi contromano non contano, quindi una corsia di rientro accanto al traguardo non fa scattare il giro. Se il primo passaggio era nel verso sbagliato (stavi andando alla partenza), il successivo lo corregge e fa ripartire il cronometro.
+- **Il tempo è calcolato tra una posizione GPS e la successiva**, nel punto in cui la linea viene attraversata, e sull'orologio del ricevitore: non è arrotondato ai 5 Hz del GPS.
+- **Intertempi.** Ogni tracciato può avere fino a 2 punti intermedi, che dividono il giro in settori (almeno 15 secondi l'uno). Si aggiungono dal sito stando fermi sul punto.
+- **Delta.** Il giro più veloce su un tracciato è tenuto punto per punto come riferimento. Mentre giri, la pagina Giri e il sito mostrano quanto sei avanti (`-`) o indietro (`+`) in quel punto della pista. A più di 30 m dalla traiettoria di riferimento il delta sparisce.
 
 <a id="it-misure"></a>
-### Cosa misura
+### Misure
 
-Ogni grandezza è un **canale sempre positivo**: quelle con segno si sdoppiano, così destra e sinistra hanno il loro massimo separato.
+**Filtro anti-buca.** Massimi, record ed eventi contano solo un livello *mantenuto* per 150 ms. L'urto di una buca dura 20-80 ms e non diventa un record di piega. I valori live restano non filtrati.
 
-`Piega_Dx` · `Piega_Sx` · `Impennata` · `Stoppie` · `GLat_Dx` · `GLat_Sx` · `G_Accel` · `G_Frena` · `Vel_Kmh`
-
-**Filtro anti-buca.** Massimi, record e contatori guardano il minimo su una finestra di 150 ms: solo un livello *mantenuto* conta. L'urto di una buca dura 20-80 ms e non diventa un record di piega. I valori live su OLED e sito restano non filtrati.
-
-**Eventi.** Contati quando il livello sostenuto supera la soglia; per essere ricontati devono prima scendere al 70% di essa.
+**Eventi.** Una manovra è contata quando supera la soglia, e ricontata solo dopo essere scesa sotto il 70% di essa. Le soglie si cambiano dalle Impostazioni; quelle iniziali:
 
 | Evento | Soglia |
 |---|---|
@@ -143,81 +197,77 @@ Ogni grandezza è un **canale sempre positivo**: quelle con segno si sdoppiano, 
 | Frenata brusca | 0.70 G |
 | Accelerata brusca | 0.50 G |
 
-**Rischio grip.** Indice 0-100% da umidità e temperatura: sale sopra il 55% di umidità e sotto i 20 °C. È una stima delle condizioni, non una misura di aderenza; serve soprattutto ad abbassare la soglia dell'allarme piega.
-
-<a id="it-giri"></a>
-### Giri e tracciati
-
-Con un fix valido, **OK sulla pagina GIRI** salva la posizione attuale come traguardo. In modalità libera resta in RAM; salvando un **tracciato** dal sito, traguardo, forma e record restano sulla flash.
-
-Ogni tracciato può avere fino a **2 checkpoint intermedi**, che dividono il giro in settori cronometrati separatamente. La **forma** del circuito si registra da sola sul giro più veloce di sessione.
-
-Il GPS gira a **5 Hz**: il firmware spegne via UBX le frasi NMEA inutilizzate, perché a 9600 baud quelle di default saturerebbero la seriale.
-
-<a id="it-web"></a>
-### Sito
-
-Dalla pagina **WiFi** (tasto OK) l'ESP32 alza un access point. Collega il telefono alla rete `WheelStat` (password a display) e apri **`http://192.168.4.1`**.
-
-| Pagina | Cosa fa |
-|---|---|
-| **Sessioni** (`/`) | Elenco dei log: scarica in CSV o GPX, elimina |
-| **Live** (`/live`) | Telemetria in tempo reale con grafici |
-| **Tracciati** (`/tracciati`) | Classifica giri, tracciato attivo, record, settori, forma |
-| **Confronta** (`/confronta`) | Due sessioni a confronto, giro per giro |
-
-![Interfacciaweb](Media/interfacciaWeb.png)
-Il download è bloccato durante la registrazione.
+**Rischio grip.** Indice 0-100% che sale sopra il 55% di umidità e sotto i 20 °C. È una stima delle condizioni, non una misura di aderenza.
 
 <a id="it-file"></a>
-### File
+### Dati
 
-| File | Contenuto |
-|---|---|
-| `LOG_n.CSV` | Una sessione |
-| `RECORD.BIN` | Record storici della modalità libera |
-| `TRACK_n.BIN` | Tracciato: nome, traguardo, forma, checkpoint |
-| `TRACK_n_REC.BIN` | Record storici su quel tracciato |
+Una sessione occupa **24 byte a campione, 3 campioni al secondo** (da 1 a 10, dalle Impostazioni): circa 260 KB l'ora, cinque ore nella memoria dati da 1,4 MB. Ogni campione porta il picco di piega, impennata e G del suo intervallo. I dati vanno sulla flash ogni 5 secondi: togliendo alimentazione si perdono al più quelli. A memoria piena la registrazione si chiude da sola.
 
-Una riga al minuto coi massimi di quel minuto, poi in coda riepilogo, eventi con le soglie e tempi sul giro (una colonna per settore se il tracciato ha checkpoint):
+Dal sito la sessione si scarica in **GPX** (il percorso, per Google Earth e simili) o in **CSV**:
 
 ```
-Minuto,Piega_Dx,Piega_Sx,Impennata,Stoppie,GLat_Dx,GLat_Sx,G_Accel,G_Frena,Vel_Kmh,Temp_C,Umid_%,Rischio_%,Lat,Lon,Giro
-1,42.3,38.1,12.4,0.0,0.81,0.74,0.42,0.63,87,18.4,62,14,45.46411,9.18854,0
+Time_s,Lean,Pitch,G_Lat,G_Long,Speed_Kmh,Temp_C,Hum_%,Risk_%,Lat,Lon,Lap
+0.00,-12.4,0.0,-0.31,0.12,64.2,18.4,62,15,45.4641100,9.1885400,1
+0.33,-18.9,0.0,-0.47,0.05,66.0,18.4,62,15,45.4641350,9.1886120,1
 ...
 
-TRACCIATO,libera
-RIEPILOGO,Piega_Dx,...,Vel_Kmh,Minuti_Tot
-MAX,48.7,...,112,23
-EVENTI,Impennate>15,Stoppie>10,Pieghe>35,Frenate>0.7G,Accelerate>0.5G
-TOT,3,0,17,9,12
+TRACK,free
+SUMMARY,Lean_R,...,Speed_Kmh,Duration_s
+MAX,48.7,...,112,1384
+EVENTS,Wheelies>15,Stoppies>10,Leans>35,HardBrakes>0.70G,HardAccels>0.50G
+TOTAL,3,0,17,9,12
 
-GIRI,Tempo_s
-1,94.2
+LAPS,Time_s
+Lap_1,94.20*
 ```
 
-<a id="it-driver"></a>
-### Componenti sostituibili
+`Lean` è positivo a destra, `Pitch` in impennata, `G_Lat` a destra, `G_Long` in accelerazione; l'asterisco segna il giro migliore. Il CSV è sempre in inglese, qualunque sia la lingua dell'interfaccia.
 
-Meteo, display, GPS e IMU si cambiano con **una riga in [Config.h](Config.h)**.
+<a id="it-driver"></a>
+### Altre schede e componenti
+
+Il firmware gira su tutta la famiglia ESP32: la piedinatura segue la scheda selezionata nell'IDE.
+
+| Chip | SU/GIÙ/OK/LOG | DHT | SDA/SCL | GPS RX/TX | Flash usata |
+|---|---|---|---|---|---|
+| **ESP32** (DevKit V1) | 13 / 25 / 14 / 27 | 4 | 21 / 22 | 16 / 17 | 86 % |
+| **ESP32-S3** 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 84 % |
+| **ESP32-S2** 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 82 % |
+| **ESP32-C3** 🔧 | 3 / 4 / 5 / 6 | 10 | 8 / 9 | 0 / 1 | 92 % |
+
+Meteo, display e GPS si cambiano con **una riga in [Config.h](Config.h)**:
 
 | Categoria | Alternative |
 |---|---|
-| Meteo | DHT22 · SHT4x · SHT31 · HTU31D · Si7021 · HTU21D · AHT20 · BME280 |
-| Display | SSD1306 · SSD1309 · SH1106 · SH1107 (tutti 128×64) |
-| GPS | u-blox M6/M8/M9 · u-blox M10 · NMEA generico |
-| IMU | BNO055 |
+| Meteo | DHT22 · SHT4x 🔧 · SHT31 🔧 · HTU31D 🔧 · Si7021 🔧 · HTU21D 🔧 · AHT20 🔧 · BME280 🔧 |
+| Display | SSD1306 · SSD1309 🔧 · SH1106 🔧 · SH1107 🔧 (tutti 128×64) |
+| GPS | u-blox M6/M8 · u-blox M10 🔧 · NMEA generico 🔧 |
 
-⚠️ **Solo il primo di ogni categoria è provato su hardware.** Gli altri rispettano il contratto e compilano.
+🔧 = compila, ma **non è mai stato provato su hardware**. Solo la configurazione della tabella [Cosa serve](#it-hardware) è montata e provata; confronta le piedinature con la serigrafia della tua scheda prima di saldare.
 
-[docs/DRIVER.md](docs/DRIVER.md) per aggiungere un driver, [docs/HARDWARE.md](docs/HARDWARE.md) per compatibilità e indirizzi I2C, [docs/CHANGELOG.md](docs/CHANGELOG.md) per lo storico versioni.
+Dettagli, indirizzi I2C e trappole note: [docs/HARDWARE.md](docs/HARDWARE.md).
+
+<a id="it-sviluppo"></a>
+### Sviluppo
+
+- [docs/ARCHITETTURA.md](docs/ARCHITETTURA.md): com'è organizzato il codice, il ciclo principale, i formati dei file.
+- [docs/DRIVER.md](docs/DRIVER.md): come funzionano i driver e come aggiungerne uno.
+- [docs/HARDWARE.md](docs/HARDWARE.md): compatibilità dei componenti.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md): storico delle versioni.
+
+La logica che non tocca l'hardware (traguardo, cronometro, delta, filtro anti-buca, formato del log) sta in `src/core/` e ha i suoi test, che girano sul PC senza la scheda:
+
+```bash
+pio test -e native
+```
 
 <a id="it-sicurezza"></a>
 ### ⚠️ Sicurezza
 
-Strumento di **analisi post-sessione**, non un ausilio alla guida. Non guardare il display mentre si è in movimento. Per rivedere i dati in un istante preciso, riprendi il display con una telecamera esterna.
+È uno strumento di **analisi dopo la guida**, non un aiuto alla guida. Non guardare il display in movimento e non usare il telefono in sella.
 
-Il rischio grip è indicativo e non sostituisce la valutazione diretta di asfalto e pneumatici. Verifica che il montaggio sul veicolo sia solido e non interferisca con comandi o visuale.
+Il rischio grip è indicativo e non sostituisce la tua valutazione di asfalto e pneumatici. Fissa la scatola in modo solido, dove non interferisce con comandi e visuale.
 
 ### Licenza e autore
 
@@ -228,120 +278,179 @@ Il rischio grip è indicativo e non sostituisce la valutazione diretta di asfalt
 <a id="english"></a>
 ## 🇬🇧 English
 
-Motorcycle telemetry on **ESP32**. A **BNO055** IMU measures lean angle, wheelie/stoppie and G-forces; a **DHT22** reads temperature and humidity and derives a grip-risk index; a **NEO-6M/8M GPS** adds speed, position and lap timing.
+**Motorcycle telemetry on an ESP32.** It measures lean, wheelies, G-forces, speed and lap times, and shows them on a small OLED and on a website the ESP32 serves to your phone by itself: no internet, no app.
 
-Everything shows on a **128×64 OLED** with 10 pages and 4 buttons, and on a **website served by the ESP32 itself** (your phone connects to its access point, no internet). Each session is logged as **CSV on the internal flash**.
+[What it does](#en-what) · [What you need](#en-hardware) · [Quick start](#en-start) · [IMU orientation](#en-orientation) · [Display](#en-oled) · [Website](#en-web) · [Laps and tracks](#en-laps) · [Measurements](#en-measures) · [Data](#en-files) · [Other boards and components](#en-drivers) · [Development](#en-dev) · [Safety](#en-safety)
 
-[OLED interface](#en-oled) · [Wiring](#en-hardware) · [Which ESP32](#en-boards) · [Build](#en-build) · [**IMU orientation**](#en-orientation) · [What it measures](#en-measures) · [Laps and tracks](#en-laps) · [Web](#en-web) · [Files](#en-files) · [Swappable components](#en-drivers) · [Safety](#en-safety)
+<a id="en-what"></a>
+### What it does
 
-<a id="en-oled"></a>
-### OLED interface
+- **Lean, wheelie/stoppie and G-forces** from a BNO055 IMU, with a filter that throws away pothole hits.
+- **Speed, position and lap timing** from a 5 Hz GPS: a finish line and up to two splits, with a **live delta** against your best lap.
+- **Grip risk** estimated from temperature and humidity, which lowers the lean-alert threshold.
+- **Recording to the internal flash**, three samples a second: about five hours, no SD card.
+- **A website on your phone**: live telemetry, charts and a map of every session, session comparison, saved tracks, CSV and GPX download, settings and firmware update over WiFi.
+- **Interface in Italian or English**, chosen at build time.
 
-**UP/DOWN** scroll the pages, **LOG** starts and stops recording, **OK** does a different job per page.
+<p align="center">
+  <img src="Media/oled/en/pages.gif" width="420" alt="The display pages, one after the other">
+</p>
 
-| # | Page | Content | OK button |
-|---|---|---|---|
-| 0 | **Lean** | Lean angle, large number and a bar from the centre. Alert banner past the safety threshold, which lowers as grip risk rises | Zero calibration |
-| 1 | **Weather** | Temperature, humidity, grip risk | - |
-| 2 | **G-Force** | Lateral and longitudinal G, with a 2D radar | - |
-| 3 | **Wheelie / Stoppie** | Pitch angle, vertical column | Zero calibration |
-| 4 | **GPS** | Fix status, speed, position, satellites | - |
-| 5 | **Laps** | Distance to next target, current lap, last, best | Sets the finish line |
-| 6 | **Records 1/2** | All-time best: lean, wheelie/stoppie, lateral G | - |
-| 7 | **Records 2/2** | All-time best: longitudinal G, speed | - |
-| 8 | **Memory** | Free space, file being written, minutes logged | - |
-| 9 | **WiFi** | SSID, password, site address, connected clients | Toggles the AP |
-
-A fixed top bar shows `REC` while recording and GPS status when lap timing is active.
-
-**At boot** the firmware lists the five components as it powers them up, with the driver name and a tick or a cross. These are real checks (I2C ACK for OLED and IMU, a forced reading for the DHT22, NMEA listening for the GPS, mount for the flash), so an unplugged component gets a cross. Then comes **magnetometer calibration** (the figure-eight to trace with the box in hand), skippable with OK.
+![The website on a phone: live, session charts, tracks](Media/web/en/overview.png)
 
 <a id="en-hardware"></a>
-### Wiring
+### What you need
 
-Pins for the **classic ESP32** (DevKit V1). For S3/S2/C3 see [Which ESP32](#en-boards).
-
-| Component | Bus / Signal | Pin | Notes |
+| Component | Connection | Pins (ESP32 DevKit V1) | Notes |
 |---|---|---|---|
-| OLED SSD1306 | I2C SDA / SCL | 21 / 22 | Address `0x3C` |
-| Bosch BNO055 | I2C SDA / SCL | 21 / 22 | Address `0x28` (`0x29` on some breakouts) |
-| DHT22 | GPIO | 4 | Single data line |
-| GPS NEO-6M/8M | UART2 | 16 (RX) / 17 (TX) | 9600 baud. **The module's TX goes to GPIO 16** |
-| Buttons UP / DOWN / OK / LOG | GPIO | 13 / 25 / 14 / 27 | `INPUT_PULLUP`, to GND |
+| ESP32 DevKit V1 | - | - | Also S3, S2, C3: see [below](#en-drivers) |
+| Bosch BNO055 IMU | I2C | SDA 21 / SCL 22 | Address `0x28` (`0x29` on some breakouts) |
+| SSD1306 128×64 OLED | I2C | SDA 21 / SCL 22 | Address `0x3C` |
+| DHT22 | GPIO | 4 | Temperature and humidity |
+| u-blox NEO-6M / 8M GPS | UART2 | RX 16 / TX 17 | 9600 baud. **The module's TX goes to GPIO 16** |
+| 4 buttons UP / DOWN / OK / LOG | GPIO | 13 / 25 / 14 / 27 | To GND, no resistors |
 
-**Bill of materials:** ESP32 DevKit V1 · Bosch BNO055 breakout · DHT22 · OLED SSD1306 I2C 128×64 · u-blox NEO-6M or NEO-8M GPS with antenna · 4 tactile buttons (often already on the display module) · dupont wires · USB power.
+Powered from USB. Pins and addresses all live in [Config.h](Config.h).
 
-Pins and addresses all live in [Config.h](Config.h).
+![Wiring diagram](Media/hardware/wiring_en.svg)
 
-<a id="en-boards"></a>
-### Which ESP32
+<details>
+<summary>The breadboard prototype</summary>
 
-The firmware runs on the whole family. The pinout follows the board selected in the IDE: no macro to set.
+![Breadboard prototype](Media/hardware/prototipo.jpg)
 
-| Chip | Status | UP/DOWN/OK/LOG | DHT | SDA/SCL | GPS RX/TX | UART | Flash |
-|---|---|---|---|---|---|---|---|
-| **ESP32** (DevKit V1) | built | 13 / 25 / 14 / 27 | 4 | 21 / 22 | 16 / 17 | 2 | 82 % |
-| **ESP32-S3** | 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 2 | 81 % |
-| **ESP32-S2** | 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 1 | 78 % |
-| **ESP32-C3** | 🔧 | 3 / 4 / 5 / 6 | 10 | 8 / 9 | 0 / 1 | 1 | **90 %** |
+</details>
 
-🔧 = compiles and respects the chip's constraints, but **has never been wired**: check it against your board's silkscreen before soldering. Only the classic one is hardware-tested.
+<a id="en-start"></a>
+### Quick start
 
-Three things to know:
+1. **Open the sketch.** In the Arduino IDE open `WheelStat.ino`; the folder must be named exactly `WheelStat`. You need Espressif's **esp32** core (3.x).
+2. **Install the libraries** from the Library Manager: `Adafruit BNO055`, `Adafruit SSD1306`, `Adafruit GFX Library`, `Adafruit Unified Sensor`, `DHT sensor library`, `TinyGPSPlus`.
+3. **Pick the language** in [Config.h](Config.h): `LANG_IT` or `LANG_EN`.
+4. **Upload** to the board. Serial monitor at 115200.
+5. **Watch the boot.** The display lists the five components with a tick or a cross: these are real checks, an unplugged component gets the cross. Then it asks you to calibrate the magnetometer by moving the box in a figure-eight (OK to skip).
+6. **Check the IMU orientation** before trusting the numbers: it is the [next section](#en-orientation).
 
-- **C3 and S2 have only two UARTs** and UART 0 is the serial monitor, so the GPS gets UART 1 (already set).
-- **On the C3 the firmware fills 90% of the flash**: the RISC-V core.
-- A family chip that isn't listed (C6, H2) fails to compile: add its block in [Config.h](Config.h) by copying the closest one. Outside the Espressif family it would be a port (native `WiFi.h`, `WebServer.h` and LittleFS only exist there).
+<p align="center">
+  <img src="Media/oled/en/boot.gif" width="32%" alt="Logo at power-up">
+  <img src="Media/oled/en/boot_checklist.png" width="32%" alt="Component check">
+  <img src="Media/oled/en/boot_calibration.png" width="32%" alt="Magnetometer calibration">
+</p>
 
-<a id="en-build"></a>
-### Build
-
-An Arduino IDE sketch. **All `.ino` files must sit in the same folder, named exactly `WheelStat`.** Serial monitor at **115200**.
-
-Libraries to install: `Adafruit BNO055` · `Adafruit SSD1306` · `Adafruit GFX Library` · `DHT sensor library` · `Adafruit Unified Sensor` · `TinyGPSPlus`. `Wire`, `WiFi`, `WebServer` and `LittleFS` ship with the ESP32 core.
+From the command line:
 
 ```bash
 arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 .
 ```
 
+With **PlatformIO** (VS Code) there is a ready [platformio.ini](platformio.ini) that downloads the libraries by itself: `pio run -t upload`. It needs Python 3.10 to 3.14.
+
 <a id="en-orientation"></a>
-### IMU orientation: do this first on a new build
+### IMU orientation
 
-**Getting it wrong raises no error: it produces plausible, wrong telemetry.** Try it with the box in your hand. Two steps, both in [Config.h](Config.h).
+**Getting it wrong raises no error: it produces plausible, wrong telemetry.** Do it once, with the box in your hand, in [Config.h](Config.h).
 
-**Step 1, the position.** How the IMU board is turned; the reference is the component side. Uncomment **one** line:
+**1. How the board sits.** Uncomment one line only:
 
 ```cpp
-#define IMU_MONTAGGIO_SOTTOSOPRA  // built like this: board upside down
-// #define IMU_MONTAGGIO_DRITTA   // components up, board flat
-// #define IMU_MONTAGGIO_MANUALE  // neither: pick P0...P7 yourself
+#define IMU_MOUNT_UPSIDE_DOWN   // board upside down (how mine is built)
+// #define IMU_MOUNT_UPRIGHT    // components up, board flat
+// #define IMU_MOUNT_MANUAL     // neither: pick one of P0...P7 yourself
 ```
 
-The BNO055 has eight predefined orientations (P0…P7) and applies them inside the chip. For an unusual position, enable `IMU_MONTAGGIO_MANUALE` and try another P.
+**2. The directions.** Power up, move the box and check. Any wrong row is fixed by flipping one sign:
 
-**Step 2, the directions.** Power up, move the box, check. Any wrong row is fixed by flipping one sign:
-
-| Move the box like this | What should happen | If reversed, flip |
+| Move the box | What should happen | If it is reversed |
 |---|---|---|
-| Lean it **right** | `Piega Dx` rises (page 0) | `SEGNO_PIEGA` |
-| Lift the **front** | `Impennata` rises, not `Stoppie` (page 3) | `SEGNO_IMPENNATA` |
-| Push it **forward** | `Long` positive, dot **up** (page 2) | `SEGNO_G_LONG` |
-| Push it **left** | dot to the **left** (page 2) | `SEGNO_G_LAT` |
+| Lean it **right** | lean rises (page 0) | flip `SIGN_LEAN` |
+| Lift the **front** | `WHEELIE` shows, not `STOPPIE` (page 3) | flip `SIGN_PITCH` |
+| Push it **forward** | `Long` positive, dot goes **up** (page 2) | flip `SIGN_G_LONG` |
+| Push it **left** | dot goes **left** (page 2) | flip `SIGN_G_LAT` |
 
-> If you find two quantities **swapped** (lean moves when you lift the nose) that's not a sign: it's step 1 to redo. The `SEGNO_*` flags invert a direction, they don't swap axes.
+If two quantities are **swapped** (lean moves when you lift the nose) that is not a sign: redo step 1.
 
-**Zero calibration** (OK on pages 0 and 3, stopped and level): compensates for a box that isn't level. Lives in RAM, redone at every power-up.
+On the bike, stopped and level, **OK on page 0 or 3** zeroes lean and pitch to make up for a box that is not level. It has to be redone at every power-up.
+
+<a id="en-oled"></a>
+### Display
+
+**UP/DOWN** scroll the pages, **LOG** starts and stops recording, **OK** does a different job per page. The top bar shows `REC` while recording and `SAT` (or `SAT!` without a fix) when a finish line is set; the thick stretch on the line under the title tells which of the ten pages you are on.
+
+| # | Page | What it shows | OK button |
+|---|---|---|---|
+| 0 | **Lean** | Lean angle with its side (arrow) and a bar growing that way. The two notches on the bar are the alert threshold, which tightens as grip risk rises; past it the title becomes a blinking warning | Zero |
+| 1 | **Weather** | Temperature, humidity, grip risk with a gauge | - |
+| 2 | **G-force** | Lateral and longitudinal G, with a crosshair (the inner ring is 0.5 G) | - |
+| 3 | **Wheelie / Stoppie** | Pitch angle | Zero |
+| 4 | **GPS** | Fix status, speed, position, satellites | - |
+| 5 | **Laps** | Delta against the reference lap (in reverse video, dark on a lit box, when you are ahead), current lap with its number, last, best | Marks the finish line here |
+| 6-7 | **Records** | All-time maxima, per track | - |
+| 8 | **Storage** | Free space, file being written, minutes | - |
+| 9 | **WiFi** | Network name, password, site address | WiFi on/off |
+
+![The ten display pages](Media/oled/en/pages.png)
+
+<p align="center">
+  <img src="Media/oled/en/page_0_lean_alert.png" width="32%" alt="Lean alert">
+  <img src="Media/oled/en/page_5_laps_behind.png" width="32%" alt="Laps, behind the reference">
+  <img src="Media/oled/en/popup_finish.png" width="32%" alt="Finish line set">
+</p>
+
+Stopping a recording brings up three summary screens: maxima, duration, events. An asterisk marks records just beaten.
+
+<p align="center">
+  <img src="Media/oled/en/summary_1.png" width="32%" alt="Summary 1/3">
+  <img src="Media/oled/en/summary_2.png" width="32%" alt="Summary 2/3">
+  <img src="Media/oled/en/summary_3.png" width="32%" alt="Summary 3/3">
+</p>
+
+The display images are generated from the real screen code, compiled on a PC: `tools/oled-preview/build.ps1` redoes them after a change.
+
+<a id="en-web"></a>
+### Website
+
+On the **WiFi** page press OK: the ESP32 creates its own network. Connect your phone to `WheelStat` with the password shown on the display and open **`http://192.168.4.1`**.
+
+**The password is not in the code.** Each device makes one up the first time it switches the WiFi on and shows it on the display. Name and password can be changed from Settings (up to 12 characters, because they must fit on one row of the display).
+
+| Page | What it does |
+|---|---|
+| **Sessions** | List of recordings: charts, CSV or GPX download, delete |
+| **Charts** | One session: path coloured by lean, then speed, lean, wheelie and G-forces. Pick a lap and slide a finger along a chart to read the values at that point |
+| **Live** | Real-time telemetry, path, lap delta |
+| **Tracks** | Create and select tracks, splits, records, leaderboard |
+| **Compare** | Two sessions side by side, lap by lap |
+| **Settings** | WiFi network, samples per second, event thresholds, lean alert, firmware update |
+
+The Live page tells when the connection drops: otherwise the last values received would stay on screen looking current.
+
+<p align="center">
+  <img src="Media/web/en/sessions.png" width="24%" alt="Sessions">
+  <img src="Media/web/en/session.png" width="24%" alt="Session charts">
+  <img src="Media/web/en/compare.png" width="24%" alt="Compare">
+  <img src="Media/web/en/settings.png" width="24%" alt="Settings">
+</p>
+
+While recording, charts, downloads and settings are blocked: serving a large file would stall the telemetry.
+
+**Updating without a cable.** Settings uploads a new firmware over WiFi: the file is `WheelStat.ino.bin` (Arduino IDE: *Sketch → Export Compiled Binary*; PlatformIO: `.pio/build/esp32/firmware.bin`). A file that is not a firmware for the same chip is refused before anything is written, and the running one stays in place until the new one has arrived whole. Sessions, tracks and settings are kept.
+
+<a id="en-laps"></a>
+### Laps and tracks
+
+Stop on the finish line with a GPS fix and press **OK on the Laps page**, or create a **track** from the website and name it: that way the line, the reference lap and the records are saved.
+
+- **The finish is a line** across the track, 20 m wide on each side. You only mark the point: the direction of travel is learned from the first pass above 15 km/h and confirmed by the second. From then on passes the wrong way do not count, so a return lane next to the line does not trigger a lap. If the first pass was the wrong way (you were riding to the start), the next one corrects it and restarts the stopwatch.
+- **The time is worked out between one GPS position and the next**, at the point where the line is crossed, and on the receiver's own clock: it is not rounded to the GPS's 5 Hz.
+- **Splits.** Each track can have up to 2 intermediate points, dividing the lap into sectors (at least 15 seconds each). Add them from the website while standing on the spot.
+- **Delta.** The fastest lap on a track is kept point by point as the reference. While you ride, the Laps page and the website show how far ahead (`-`) or behind (`+`) you are at that point of the track. More than 30 m off the reference line the delta disappears.
 
 <a id="en-measures"></a>
-### What it measures
+### Measurements
 
-Every quantity is an **always-positive channel**: signed ones split in two, so left and right each keep their own maximum.
+**Pothole filter.** Maxima, records and events only count a level *held* for 150 ms. A pothole hit lasts 20-80 ms and never becomes a lean record. Live values stay unfiltered.
 
-`Piega_Dx` (lean right) · `Piega_Sx` (lean left) · `Impennata` (wheelie) · `Stoppie` · `GLat_Dx` · `GLat_Sx` · `G_Accel` · `G_Frena` (braking) · `Vel_Kmh`
-
-**Pothole filter.** Maximums, records and counters look at the minimum over a 150 ms window: only a level *held* for the whole window counts. A pothole impact lasts 20-80 ms and never becomes a lean record. Live values on the OLED and the site stay unfiltered.
-
-**Events.** Counted when the sustained level crosses the threshold; to be counted again they must first drop to 70% of it.
+**Events.** A manoeuvre is counted when it crosses the threshold, and counted again only after dropping below 70% of it. Thresholds can be changed from Settings; the initial ones:
 
 | Event | Threshold |
 |---|---|
@@ -351,80 +460,79 @@ Every quantity is an **always-positive channel**: signed ones split in two, so l
 | Hard braking | 0.70 G |
 | Hard acceleration | 0.50 G |
 
-**Grip risk.** A 0-100% index from humidity and temperature: it rises above 55% humidity and below 20 °C. An estimate of conditions, not a traction measurement; its main job is lowering the lean-alert threshold.
-
-<a id="en-laps"></a>
-### Laps and tracks
-
-With a valid fix, **OK on the LAPS page** saves the current position as the finish line. In free mode it lives in RAM; saving a **track** from the website keeps line, shape and records on the flash.
-
-Each track can hold up to **2 intermediate checkpoints**, splitting the lap into separately timed sectors. The circuit **shape** records itself on the fastest lap of the session.
-
-The GPS runs at **5 Hz**: the firmware turns off unused NMEA sentences via UBX, because at 9600 baud the default set would saturate the line.
-
-<a id="en-web"></a>
-### Web
-
-From the **WiFi** page (OK button) the ESP32 brings up an access point. Connect your phone to `WheelStat` (password on the display) and open **`http://192.168.4.1`**.
-
-| Page | What it does |
-|---|---|
-| **Sessions** (`/`) | Log list: download as CSV or GPX, delete |
-| **Live** (`/live`) | Real-time telemetry with charts |
-| **Tracks** (`/tracciati`) | Lap leaderboard, active track, records, sectors, shape |
-| **Compare** (`/confronta`) | Two sessions side by side, lap by lap |
-
-Downloads are blocked while recording.
+**Grip risk.** A 0-100% index that rises above 55% humidity and below 20 °C. An estimate of conditions, not a measurement of traction.
 
 <a id="en-files"></a>
-### Files
+### Data
 
-| File | Content |
-|---|---|
-| `LOG_n.CSV` | One session |
-| `RECORD.BIN` | All-time records for free mode |
-| `TRACK_n.BIN` | Track: name, finish line, shape, checkpoints |
-| `TRACK_n_REC.BIN` | All-time records on that track |
+A session takes **24 bytes per sample, 3 samples a second** (1 to 10, from Settings): about 260 KB an hour, five hours in the 1.4 MB data area. Each sample carries the peak of lean, wheelie and G over its interval. Data reaches the flash every 5 seconds: cutting power loses those at most. When the storage is full the recording closes by itself.
 
-One row per minute with that minute's maximums, then the summary, events with their thresholds, and lap times (one column per sector if the track has checkpoints):
+The website exports a session as **GPX** (the path, for Google Earth and the like) or **CSV**:
 
 ```
-Minuto,Piega_Dx,Piega_Sx,Impennata,Stoppie,GLat_Dx,GLat_Sx,G_Accel,G_Frena,Vel_Kmh,Temp_C,Umid_%,Rischio_%,Lat,Lon,Giro
-1,42.3,38.1,12.4,0.0,0.81,0.74,0.42,0.63,87,18.4,62,14,45.46411,9.18854,0
+Time_s,Lean,Pitch,G_Lat,G_Long,Speed_Kmh,Temp_C,Hum_%,Risk_%,Lat,Lon,Lap
+0.00,-12.4,0.0,-0.31,0.12,64.2,18.4,62,15,45.4641100,9.1885400,1
+0.33,-18.9,0.0,-0.47,0.05,66.0,18.4,62,15,45.4641350,9.1886120,1
 ...
 
-TRACCIATO,libera
-RIEPILOGO,Piega_Dx,...,Vel_Kmh,Minuti_Tot
-MAX,48.7,...,112,23
-EVENTI,Impennate>15,Stoppie>10,Pieghe>35,Frenate>0.7G,Accelerate>0.5G
-TOT,3,0,17,9,12
+TRACK,free
+SUMMARY,Lean_R,...,Speed_Kmh,Duration_s
+MAX,48.7,...,112,1384
+EVENTS,Wheelies>15,Stoppies>10,Leans>35,HardBrakes>0.70G,HardAccels>0.50G
+TOTAL,3,0,17,9,12
 
-GIRI,Tempo_s
-1,94.2
+LAPS,Time_s
+Lap_1,94.20*
 ```
 
-<a id="en-drivers"></a>
-### Swappable components
+`Lean` is positive to the right, `Pitch` in a wheelie, `G_Lat` to the right, `G_Long` when accelerating; the asterisk marks the best lap. The CSV is always in English, whatever the interface language.
 
-Weather sensor, display, GPS and IMU are changed with **one line in [Config.h](Config.h)**.
+<a id="en-drivers"></a>
+### Other boards and components
+
+The firmware runs on the whole ESP32 family: the pinout follows the board selected in the IDE.
+
+| Chip | UP/DOWN/OK/LOG | DHT | SDA/SCL | GPS RX/TX | Flash used |
+|---|---|---|---|---|---|
+| **ESP32** (DevKit V1) | 13 / 25 / 14 / 27 | 4 | 21 / 22 | 16 / 17 | 86 % |
+| **ESP32-S3** 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 84 % |
+| **ESP32-S2** 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 82 % |
+| **ESP32-C3** 🔧 | 3 / 4 / 5 / 6 | 10 | 8 / 9 | 0 / 1 | 92 % |
+
+Weather sensor, display and GPS are swapped with **one line in [Config.h](Config.h)**:
 
 | Category | Alternatives |
 |---|---|
-| Weather | DHT22 · SHT4x · SHT31 · HTU31D · Si7021 · HTU21D · AHT20 · BME280 |
-| Display | SSD1306 · SSD1309 · SH1106 · SH1107 (all 128×64) |
-| GPS | u-blox M6/M8/M9 · u-blox M10 · generic NMEA |
-| IMU | BNO055 |
+| Weather | DHT22 · SHT4x 🔧 · SHT31 🔧 · HTU31D 🔧 · Si7021 🔧 · HTU21D 🔧 · AHT20 🔧 · BME280 🔧 |
+| Display | SSD1306 · SSD1309 🔧 · SH1106 🔧 · SH1107 🔧 (all 128×64) |
+| GPS | u-blox M6/M8 · u-blox M10 🔧 · generic NMEA 🔧 |
 
-⚠️ **Only the first of each category is hardware-tested.** The others honour the contract and compile.
+🔧 = it compiles, but **has never been tried on hardware**. Only the setup in the [What you need](#en-hardware) table is built and tested; check a pinout against your board's silkscreen before soldering.
 
-[docs/DRIVER.md](docs/DRIVER.md) for adding a driver, [docs/HARDWARE.md](docs/HARDWARE.md) for compatibility and I2C addresses, [docs/CHANGELOG.md](docs/CHANGELOG.md) for the version history.
+Details, I2C addresses and known traps: [docs/HARDWARE.md](docs/HARDWARE.md) (in Italian).
+
+<a id="en-dev"></a>
+### Development
+
+The documents in `docs/` are in Italian:
+
+- [docs/ARCHITETTURA.md](docs/ARCHITETTURA.md): how the code is organised, the main loop, the file formats.
+- [docs/DRIVER.md](docs/DRIVER.md): how the drivers work and how to add one.
+- [docs/HARDWARE.md](docs/HARDWARE.md): component compatibility.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md): version history.
+
+The logic that never touches the hardware (finish line, lap timer, delta, pothole filter, log format) lives in `src/core/` and has its own tests, which run on a PC with no board:
+
+```bash
+pio test -e native
+```
 
 <a id="en-safety"></a>
 ### ⚠️ Safety
 
-A **post-session analysis tool**, not a riding aid. Do not look at the display while moving. To review data at a precise moment, film the display with an external camera.
+This is a tool for **analysis after the ride**, not a riding aid. Do not look at the display while moving and do not use the phone in the saddle.
 
-The grip risk is indicative and does not replace your own assessment of tarmac and tyres. Make sure the mounting is solid and does not interfere with controls or visibility.
+The grip risk is indicative and does not replace your own judgement of tarmac and tyres. Fix the box solidly, where it does not get in the way of controls or view.
 
 ### License and author
 

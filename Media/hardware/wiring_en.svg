@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <!-- WheelStat wiring, ESP32 DevKit V1. Pins as in Config.h. -->
+  <rect width="1000" height="600" rx="18" fill="#0d1015"/>
+  <style>
+    .box{fill:#161b22;stroke:#2c3542;stroke-width:2}
+    .esp{fill:#12202b;stroke:#4cc9ff;stroke-width:2}
+    .t{fill:#e9edf3;font-size:17px;font-weight:700}
+    .s{fill:#8b93a4;font-size:12.5px}
+    .p{fill:#e9edf3;font-size:13px;font-family:Consolas,Menlo,monospace}
+    .pd{fill:#8b93a4;font-size:12px;font-family:Consolas,Menlo,monospace}
+    .w{fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
+    .sda{stroke:#4cc9ff}.scl{stroke:#ffd166}.dat{stroke:#4ede93}.tx{stroke:#c792ea}.rx{stroke:#ff9e64}.btn{stroke:#ff5d6c}
+    .dot{stroke:none}
+  </style>
+
+  <!-- ESP32 -->
+  <rect class="esp" x="400" y="150" width="200" height="320" rx="12"/>
+  <text class="t" x="500" y="182" text-anchor="middle">ESP32</text>
+  <text class="s" x="500" y="200" text-anchor="middle">DevKit V1</text>
+  <text class="p" x="412" y="246">GPIO21 SDA</text>
+  <text class="p" x="412" y="276">GPIO22 SCL</text>
+  <text class="p" x="412" y="356">GPIO4</text>
+  <text class="p" x="588" y="246" text-anchor="end">GPIO16 RX2</text>
+  <text class="p" x="588" y="276" text-anchor="end">GPIO17 TX2</text>
+  <text class="p" x="588" y="356" text-anchor="end">GPIO13</text>
+  <text class="p" x="588" y="381" text-anchor="end">GPIO25</text>
+  <text class="p" x="588" y="406" text-anchor="end">GPIO14</text>
+  <text class="p" x="588" y="431" text-anchor="end">GPIO27</text>
+  <text class="pd" x="500" y="458" text-anchor="middle">USB 5V · 3V3 · GND</text>
+
+  <!-- I2C bus: BNO055 and OLED -->
+  <rect class="box" x="40" y="60" width="230" height="110" rx="10"/>
+  <text class="t" x="60" y="92">BNO055</text>
+  <text class="s" x="60" y="112">IMU · I2C 0x28</text>
+  <text class="pd" x="60" y="140">SDA  SCL  VIN  GND</text>
+
+  <rect class="box" x="40" y="200" width="230" height="110" rx="10"/>
+  <text class="t" x="60" y="232">OLED SSD1306</text>
+  <text class="s" x="60" y="252">128×64 · I2C 0x3C</text>
+  <text class="pd" x="60" y="280">SDA  SCL  VCC  GND</text>
+
+  <path class="w sda" d="M270 120 H330 V240 H400"/>
+  <path class="w sda" d="M270 240 H330"/>
+  <path class="w scl" d="M270 135 H350 V270 H400"/>
+  <path class="w scl" d="M270 270 H350"/>
+  <circle class="dot" cx="330" cy="240" r="4" fill="#4cc9ff"/>
+  <circle class="dot" cx="350" cy="270" r="4" fill="#ffd166"/>
+
+  <!-- DHT22 -->
+  <rect class="box" x="40" y="340" width="230" height="100" rx="10"/>
+  <text class="t" x="60" y="372">DHT22</text>
+  <text class="s" x="60" y="392">temperature / humidity</text>
+  <text class="pd" x="60" y="420">DATA  VCC  GND</text>
+  <path class="w dat" d="M270 352 H400"/>
+
+  <!-- GPS -->
+  <rect class="box" x="730" y="60" width="230" height="130" rx="10"/>
+  <text class="t" x="750" y="92">GPS u-blox</text>
+  <text class="s" x="750" y="112">NEO-6M / 8M · 9600 baud</text>
+  <text class="pd" x="750" y="146">TX  RX  VCC  GND</text>
+  <text class="s" x="750" y="172">TX → GPIO16 · RX ← GPIO17</text>
+  <path class="w tx" d="M730 140 H670 V242 H600"/>
+  <path class="w rx" d="M730 156 H690 V272 H600"/>
+
+  <!-- Buttons -->
+  <rect class="box" x="730" y="320" width="230" height="150" rx="10"/>
+  <text class="t" x="750" y="352">4 buttons</text>
+  <text class="s" x="750" y="372">to GND, internal pull-ups</text>
+  <text class="p" x="770" y="400">UP</text>
+  <text class="p" x="770" y="420">DOWN</text>
+  <text class="p" x="770" y="440">OK</text>
+  <text class="p" x="770" y="460">LOG</text>
+  <path class="w btn" d="M600 352 H700 V396 H760"/>
+  <path class="w btn" d="M600 377 H690 V416 H760"/>
+  <path class="w btn" d="M600 402 H680 V436 H760"/>
+  <path class="w btn" d="M600 427 H670 V456 H760"/>
+  <text class="pd" x="944" y="430" text-anchor="end">→ GND</text>
+
+  <!-- Legend -->
+  <g font-size="12.5" fill="#8b93a4">
+    <rect x="40" y="520" width="920" height="50" rx="10" fill="#161b22"/>
+    <line x1="64" y1="545" x2="94" y2="545" class="w sda"/><text x="102" y="549">SDA</text>
+    <line x1="160" y1="545" x2="190" y2="545" class="w scl"/><text x="198" y="549">SCL</text>
+    <line x1="256" y1="545" x2="286" y2="545" class="w dat"/><text x="294" y="549">DHT</text>
+    <line x1="352" y1="545" x2="382" y2="545" class="w tx"/><text x="390" y="549">GPS TX</text>
+    <line x1="470" y1="545" x2="500" y2="545" class="w rx"/><text x="508" y="549">GPS RX</text>
+    <line x1="588" y1="545" x2="618" y2="545" class="w btn"/><text x="626" y="549">Buttons</text>
+    <text x="936" y="549" text-anchor="end">3V3 and GND: to every module</text>
+  </g>
+</svg>

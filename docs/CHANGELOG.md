@@ -1,6 +1,6 @@
 # Storico versioni
 
-Trasferito dall'intestazione di WheelStat.ino nel refactor di alleggerimento: erano 112 righe di commento in cima al file principale, e da quando il progetto e' in git il posto giusto per la cronologia e' un documento a parte.
+La cronologia del progetto sta qui e solo qui: nel codice i commenti spiegano il perché di una scelta, non quando è stata fatta. I nomi di funzioni e file citati nelle voci fino alla v9.16 sono quelli di allora (in italiano, prima della riscrittura v10.0).
 
 ```
 STORICO VERSIONI
@@ -142,4 +142,112 @@ v9.16 il firmware compila per tutta la famiglia ESP32 (classico, S3,
       restare disallineate.
       Ripulita la cartella: tolti CLAUDE.md e l'anteprima animazioni in
       browser. Restano il README e i tre documenti in docs/.
+v10.0 riscrittura della struttura, comportamento del dispositivo
+      invariato salvo i punti segnati con (!).
+      - Da tre .ino concatenati a moduli C++ veri: WheelStat.ino contiene
+        solo setup()/loop(), il resto sta in src/ (un modulo per
+        compito, ognuno con il suo header) con i driver in src/drivers/,
+        le pagine OLED in src/ui/, il sito in src/web/. Le ~80 variabili
+        globali visibili ovunque sono diventate stato privato del modulo
+        che le possiede. Resta uno sketch Arduino IDE.
+      - Codice e commenti in inglese; i commenti tengono i "perche'" e
+        la cronologia resta solo in questo file.
+      - (!) Lingua dell'interfaccia (OLED + sito) scelta in Config.h:
+        LANG_IT o LANG_EN. Tutti i testi stanno in src/i18n/. Il log
+        seriale e' sempre in inglese.
+      - (!) Formato dati nuovo e in inglese, NON compatibile coi file
+        esistenti: colonne CSV (Lean_R, Wheelie, Speed_Kmh...), righe di
+        riepilogo (TRACK/SUMMARY/MAX/EVENTS/TOTAL/LAPS), firme dei .BIN
+        (WSR3, WST4). Record e tracciati salvati ripartono da zero; i
+        vecchi LOG_n.CSV restano scaricabili ma non entrano in
+        Confronta. Il formato e' descritto in src/SessionFormat.h.
+      - (!) Indirizzi del sito in inglese (/tracks, /compare, /data,
+        /download...) e campi JSON di /data rinominati; i settori
+        diventano array, non piu' tre campi fissi.
+      - Le pagine web escono a blocchi mentre vengono generate invece
+        di essere costruite in una String da qualche KB: niente piu'
+        frammentazione dello heap. GPX compreso, che ora conserva la
+        precisione piena di Lat/Lon.
+      - Tolte le duplicazioni: azzeramento giri (era copiato in tre
+        punti), validazione del nome file (tre handler), lettura CSV
+        (un solo lettore a righe), numeri di pagina 0-9 sostituiti da
+        un enum, checklist di avvio guidata da una tabella.
+      - I nomi dei tracciati vengono ora "escapati" nell'HTML.
+      - Senza display il riepilogo di fine sessione non blocca piu' per
+        30 secondi.
+      Verificato con la matrice di compilazione in docs/DRIVER.md (4
+      schede, 2 lingue, tutti i driver). Su hardware resta da provare.
+v11.0 funzioni nuove e quattro scelte di progetto cambiate. (!) segna
+      cio' che si comporta diversamente da prima.
+      - (!) Log fitto: la sessione non e' piu' una riga al minuto coi
+        massimi ma 3 campioni al secondo (da 1 a 10, impostabile), in un
+        file binario LOG_n.BIN da 24 byte a campione: circa 260 KB l'ora,
+        cinque ore sulla partizione dati. Ogni campione e' il picco del
+        suo intervallo dopo il filtro anti-buca, quindi il massimo dei
+        campioni coincide col massimo di sessione. Il sito lo converte in
+        CSV al download (colonne con segno: Lean, Pitch, G_Lat, G_Long).
+        Scrittura ogni 5 s a file aperto; a memoria piena la
+        registrazione si chiude da sola col suo riepilogo. I LOG_n.CSV
+        dei firmware fino alla v9.16 restano scaricabili ed eliminabili.
+      - (!) Traguardo e checkpoint sono linee, non cerchi: una linea di
+        20 m per lato di traverso al verso di marcia. Il verso non si
+        imposta: lo impara dal primo passaggio sopra i 15 km/h e lo
+        conferma al secondo; finche' e' provvisorio un passaggio
+        contrario lo corregge e fa ripartire il cronometro senza contare
+        un giro. Il tempo e' interpolato tra le due posizioni GPS a
+        cavallo della linea.
+      - (!) I tempi usano l'orologio del ricevitore GPS, non millis():
+        servire una pagina web tiene fermo il loop per centinaia di
+        millisecondi e prima quel ritardo finiva nel tempo sul giro.
+        Buffer della UART GPS portato a 1 KB per non perdere posizioni
+        in quei momenti.
+      - Delta sul giro migliore: il giro piu' veloce su un tracciato
+        viene tenuto punto per punto (160 punti che si diradano da soli
+        su giri lunghi) e il distacco in quel punto compare sulla pagina
+        GIRI e sul sito. La stessa traccia sostituisce la "forma" del
+        tracciato, che prima si fermava a 80 secondi di giro.
+      - Pagina Grafici di una sessione sul sito: percorso colorato per
+        piega, velocita', piega, impennata e forze G, per l'intera
+        sessione o un giro, con cursore che si scorre col dito. Il
+        dispositivo manda solo il file: decodifica e disegno li fa il
+        telefono.
+      - Pagina Impostazioni: nome e password della rete, campioni al
+        secondo, soglie degli eventi, allarme piega. Salvate in
+        /SETTINGS.BIN.
+      - (!) La password del WiFi non e' piu' in Config.h (e quindi nel
+        repo): ogni dispositivo se ne genera una alla prima accensione
+        del WiFi e la mostra sull'OLED. Quella vecchia resta nella
+        cronologia di git: non va piu' usata.
+      - Aggiornamento firmware dal sito (OTA), con controllo che il file
+        sia un'applicazione per lo stesso chip prima di scrivere.
+      - src/core/: la logica che non tocca l'hardware (linee, cronometro,
+        traccia e delta, orologio GPS, filtro anti-buca ed eventi,
+        formato del log, regole delle impostazioni) e' C++ senza
+        Arduino, con 39 test che girano sul PC: pio test -e native.
+      - platformio.ini accanto allo sketch Arduino, per le quattro
+        schede.
+      - (!) Formati su flash cambiati: tracciati (WST5) e sessioni
+        ripartono da zero; i record dei canali (WSR3) restano.
+      - OLED: tratto sulla linea del titolo che dice in quale delle dieci
+        pagine sei; pagina Piega con freccia del lato, barra che cresce
+        da quella parte e due tacche sulla soglia dell'allarme (si
+        stringono col rischio grip); simbolo dei gradi disegnato invece
+        della "o"; barra del rischio sul Meteo; anello di 0,5 G sul
+        mirino; sulla pagina Giri il delta in negativo quando sei avanti
+        e il numero del giro in corso.
+      - Sito: colonna larga al massimo 760 px anche sul computer; sulla
+        pagina Live piega (col lato e una barra) e velocita' in grande,
+        stato della connessione (prima, a WiFi caduto, restavano a
+        schermo gli ultimi valori), giri ed eventi in riquadri invece che
+        in una riga di testo, traccia centrata. Grafici nitidi sui
+        telefoni (disegnati alla densita' dello schermo). Elenco
+        sessioni con tracciato e giri di ognuna, memoria con barra.
+      - tools/oled-preview: le schermate OLED disegnate sul PC dal codice
+        vero, per le immagini della documentazione. README con schermate
+        del display e del sito in tutte e due le lingue e schema dei
+        collegamenti.
+      Verificato: test sul PC, matrice di compilazione Arduino, build
+      PlatformIO dell'ESP32 classico, pagina Grafici provata in un
+      browser con una sessione sintetica. Su hardware resta da provare
+      tutto, v10.0 compresa.
 ```
