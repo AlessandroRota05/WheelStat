@@ -11,10 +11,13 @@
 #include <string>
 #include <vector>
 
+#include <qrcode.h>
+
 #include "src/Buttons.h"
 #include "src/Gps.h"
 #include "src/LapTimer.h"
 #include "src/Motion.h"
+#include "src/Power.h"
 #include "src/Recorder.h"
 #include "src/Records.h"
 #include "src/Settings.h"
@@ -63,7 +66,8 @@ static uint16_t          events[EVENT_COUNT];
 static bool              newRecord[CHANNEL_COUNT];
 
 static bool     hasTrack = false, lapOn = false, hasDelta = false;
-static bool     recording = false, wifiOn = false, keys = false;
+static bool     recording = false, wifiOn = false, keys = false, powerSense = false;
+static std::string outDirForQr;
 static int32_t  deltaMs = 0;
 static uint32_t lapMs = 0, lastMs = 0, bestMs = 0;
 static int      lapsDone = 0;
@@ -108,14 +112,53 @@ uint32_t minutesLogged() { return 23; }
 uint32_t durationSeconds() { return 1384; }
 }
 namespace settings {
+uint8_t logRateHz() { return config.logRateHz; }
 const char *wifiName() { return config.wifiName; }
 const char *wifiPassword() { return config.wifiPassword; }
 float leanAlertDeg() { return config.leanAlertDeg; }
 }
 namespace storage {
 bool ok() { return true; }
-size_t freeBytes() { return 1184 * 1024; }
+uint64_t freeBytes() { return 1184 * 1024; }
+uint64_t totalBytes() { return 1408 * 1024; }
+uint64_t usedBytes() { return totalBytes() - freeBytes(); }
+bool onCard() { return false; }
 }
+namespace power {
+bool sensing() { return powerSense; }
+float volts() { return 13.8f; }
+}
+
+// esp_qrcode on a PC: qr_matrix.py encodes, this hands the matrix over in
+// the core's format (a handle the module getter understands).
+static std::vector<uint8_t> qrMatrix;  // size, then size*size cells
+int esp_qrcode_generate(esp_qrcode_config_t *cfg, const char *text) {
+  const char *python = getenv("WHEELSTAT_PYTHON");
+  const char *script = getenv("WHEELSTAT_QR_SCRIPT");
+  if (!python || !script) return -1;
+  std::string input = outDirForQr + "/qr_input.txt";
+  FILE *f = fopen(input.c_str(), "wb");
+  fputs(text, f);
+  fclose(f);
+  std::string command = std::string("\"\"") + python + "\" \"" + script + "\" \"" + input + "\"\"";
+  FILE *out = popen(command.c_str(), "r");
+  if (!out) return -1;
+  int size = 0;
+  if (fscanf(out, "%d", &size) != 1) { pclose(out); return -1; }
+  qrMatrix.assign(1 + size * size, 0);
+  qrMatrix[0] = size;
+  char row[256];
+  for (int y = 0; y < size && fscanf(out, "%255s", row) == 1; y++)
+    for (int x = 0; x < size; x++) qrMatrix[1 + y * size + x] = row[x] == '1';
+  pclose(out);
+  cfg->display_func(qrMatrix.data());
+  return 0;
+}
+int esp_qrcode_get_size(esp_qrcode_handle_t code) { return code[0]; }
+bool esp_qrcode_get_module(esp_qrcode_handle_t code, int x, int y) {
+  return code[1 + y * code[0] + x] != 0;
+}
+
 namespace stats {
 const float *sessionMax() { return sessionBest; }
 uint16_t eventCount(uint8_t event) { return events[event]; }
@@ -183,6 +226,7 @@ static void setUpRide() {
   strlcpy(config.wifiName, "WheelStat", sizeof(config.wifiName));
   strlcpy(config.wifiPassword, "k7m2x9qa", sizeof(config.wifiPassword));
   config.leanAlertDeg = 45;
+  config.logRateHz = 3;
 
   motionState = {34.0f, 2.0f, 34.0f, 0, 0, 0.62f, -0.35f};
   air = {true, 18.4f, 62, 15};
@@ -217,6 +261,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   outDir = argv[1];
+  outDirForQr = outDir;
   setUpRide();
   oled::begin();
 
@@ -227,11 +272,11 @@ int main(int argc, char **argv) {
   save("boot_logo");
 
   const char *labels[] = {"OLED", TR_O_BOOT_WEATHER, "IMU", "GPS", TR_O_BOOT_STORAGE};
-  const char *names[]  = {"SSD1306", "DHT22", "BNO055", "u-blox", "LittleFS"};
+  const char *names[]  = {"SSD1306", "DHT22", "BNO055", "u-blox M8", "LittleFS"};
   oled::checklistBegin();
   for (int row = 0; row < 5; row++) {
     oled::checklistPending(row, labels[row], names[row]);
-    oled::checklistResult(row, true);
+    oled::checklistResult(row, true, names[row]);
   }
   save("boot_checklist");
 
@@ -252,6 +297,7 @@ int main(int argc, char **argv) {
   showPage(oled::Page::Records2, "page_7_records2");
   showPage(oled::Page::Storage,  "page_8_storage");
   showPage(oled::Page::WiFi,     "page_9_wifi");
+  showPage(oled::Page::WiFiQr,   "page_10_qr");
 
   // Variants worth a picture of their own.
   motionState.lean = -47; motionState.leanAbs = 47;

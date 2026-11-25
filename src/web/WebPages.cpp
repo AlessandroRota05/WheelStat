@@ -28,6 +28,11 @@ void handleSessions() {
   PageWriter page(server, CONTENT_HTML);
   beginPage(page, "WheelStat", Tab::Sessions);
 
+  // First, because it explains why the charts below cannot be opened now.
+  if (recorder::isRecording())
+    page.print(F("<div class='card'><span id='rec'><span class='dot'></span>REC</span>"
+                 TR_W_REC_IN_PROGRESS "</div>"));
+
   page.print(F("<h2>" TR_W_SESSIONS_TITLE "</h2><ul class='list'>"));
 
   // Track and lap count of each session, read from their summaries in one
@@ -36,7 +41,7 @@ void handleSessions() {
   const int entryCount = sessions::list(entries);
 
   int found = 0;
-  File root = LittleFS.open("/");
+  File root = storage::sessions().open("/");
   if (root) {
     for (File file = root.openNextFile(); file; file = root.openNextFile()) {
       const char *name = file.name();  // with or without "/" depending on the core
@@ -47,7 +52,13 @@ void handleSessions() {
       // downloaded as they are, or deleted.
       const bool current = sessions::isCurrentFormat(name);
 
-      page.print(F("<li><div class='row'><span><b>"));
+      // The whole card opens the charts: on a phone that is the action
+      // almost every time, so it gets the largest target. Downloads and
+      // delete sit underneath, small, away from where the thumb lands.
+      page.print(F("<li class='session'>"));
+      if (current) page.printf("<a class='open' href='/session?f=%s'>", name);
+      else page.print(F("<div class='open'>"));
+      page.print(F("<span><b>"));
       page.print(name);
       page.print(F("</b><br><span class='dim'>"));
       for (int i = 0; i < entryCount; i++) {
@@ -59,16 +70,15 @@ void handleSessions() {
       }
       page.printf("%.1f KB", file.size() / 1024.0);
       if (!current) page.print(F(" &middot; " TR_W_OLD_FORMAT));
-      page.print(F("</span></span><span>"));
-      if (current) {
-        page.printf("<a class='btn small' href='/session?f=%s'>", name);
-        page.print(F(TR_W_CHARTS "</a> "));
-      }
-      page.printf("<a class='btn ghost small' href='/download?f=%s'>CSV</a> ", name);
-      if (current) page.printf("<a class='btn ghost small' href='/gpx?f=%s'>GPX</a> ", name);
-      page.printf("<a class='btn danger small' href='/delete?f=%s' ", name);
+      page.print(F("</span></span>"));
+      if (current) page.print(F("<span class='go'>" TR_W_CHARTS " &rsaquo;</span></a>"));
+      else page.print(F("</div>"));
+
+      page.printf("<div class='actions'><a href='/download?f=%s'>CSV</a>", name);
+      if (current) page.printf("<a href='/gpx?f=%s'>GPX</a>", name);
+      page.printf("<a class='danger' href='/delete?f=%s' ", name);
       page.print(F("onclick=\"return confirm('" TR_W_CONFIRM_DELETE_FILE "')\">"
-                   TR_W_DELETE "</a></span></div></li>"));
+                   TR_W_DELETE "</a></div></li>"));
       found++;
     }
     root.close();
@@ -78,17 +88,17 @@ void handleSessions() {
 
   // Fill level: the flash cannot be pulled out, better to see it here. The
   // gauge turns red in the last tenth, when a session may not fit any more.
-  const size_t used = storage::usedBytes(), total = storage::totalBytes();
+  const uint64_t used = storage::usedBytes(), total = storage::totalBytes();
   const unsigned percent = total > 0 ? (unsigned)(used * 100 / total) : 0;
-  page.print(F("<div class='card'><div class='row'><span class='dim'>" TR_W_STORAGE "</span>"));
-  page.printf("<span>%u / %u KB</span></div>", (unsigned)(used / 1024), (unsigned)(total / 1024));
+  char usedText[16], totalText[16];
+  formatSize(used, usedText, sizeof(usedText));
+  formatSize(total, totalText, sizeof(totalText));
+  page.print(F("<div class='card'><div class='row'><span class='dim'>" TR_W_STORAGE));
+  if (storage::onCard()) page.print(F(" &middot; microSD"));
+  page.printf("</span><span>%s / %s</span></div>", usedText, totalText);
   page.printf("<div class='meter%s'><i style='width:%u%%'></i></div></div>",
               percent >= 90 ? " full" : "", percent);
   page.print(F("<p><a href='/tracks'>" TR_W_TRACKS_AND_RECORDS " &rarr;</a></p>"));
-
-  if (recorder::isRecording())
-    page.print(F("<div class='card'><span id='rec'>&#9679; REC</span>"
-                 TR_W_REC_IN_PROGRESS "</div>"));
 
   endPage(page);
 }
@@ -237,17 +247,19 @@ static void printRecords(Print &page) {
     page.print(F(" &middot; "));
     printEscaped(page, tracks::active().name);
   }
-  page.print(F("</h2><div class='card'><table>"));
+  // A grid of label/value pairs, like the live tiles: nine rows of a table
+  // would take a whole phone screen.
+  page.print(F("</h2><div class='card'><div class='pairs'>"));
   for (int c = 0; c < CHANNEL_COUNT; c++) {
     const ChannelInfo &channel = channelInfo(c);
-    page.print(F("<tr><td>"));
+    page.print(F("<div>"));
     page.print(channel.label);
-    page.print(F("</td><td class='num'><b>"));
+    page.print(F("<b>"));
     page.print(best.channels[c], channel.decimals);
     page.print(channel.unitHtml);
-    page.print(F("</b></td></tr>"));
+    page.print(F("</b></div>"));
   }
-  page.print(F("</table></div><div class='caption'><span>"));
+  page.print(F("</div></div><div class='caption'><span>"));
   page.print(best.sessions);
   page.print(F(TR_W_SESSIONS_WORD " &middot; "));
   page.print(best.totalMinutes);
@@ -360,6 +372,19 @@ static void printTimeCell(Print &page, bool present, uint32_t ms, bool wins) {
   page.print(F("</td>"));
 }
 
+// How much A is slower (+) or faster (-) than B on the same row, in the
+// colours of the live delta.
+static void printGapCell(Print &page, bool present, int32_t ms) {
+  if (!present) {
+    page.print(F("<td></td>"));
+    return;
+  }
+  if (ms < 0)      page.print(F("<td class='num win'>"));
+  else if (ms > 0) page.print(F("<td class='num danger'>"));
+  else             page.print(F("<td class='num dim'>"));
+  page.printf("%+.2f</td>", ms / 1000.0f);
+}
+
 static void printComparison(Print &page, const char *nameA, const char *nameB) {
   sessions::Info a = {}, b = {};
   sessions::readInfo(nameA, a);
@@ -380,7 +405,8 @@ static void printComparison(Print &page, const char *nameA, const char *nameB) {
 
   page.print(F("<h2>" TR_W_LAP_TIMES "</h2><div class='card'><table>"
                "<tr><td class='dim'>" TR_W_LAP "</td>"
-               "<td class='dim num'>A</td><td class='dim num'>B</td></tr>"));
+               "<td class='dim num'>A</td><td class='dim num'>B</td>"
+               "<td class='dim num'>A&minus;B</td></tr>"));
 
   int rows = max(a.lapCount, b.lapCount);
   for (int i = 0; i < rows; i++) {
@@ -390,6 +416,7 @@ static void printComparison(Print &page, const char *nameA, const char *nameB) {
     page.printf("<tr><td>%d</td>", i + 1);
     printTimeCell(page, hasA, a.lapTimes[i], both && a.lapTimes[i] < b.lapTimes[i]);
     printTimeCell(page, hasB, b.lapTimes[i], both && b.lapTimes[i] < a.lapTimes[i]);
+    printGapCell(page, both, (int32_t)a.lapTimes[i] - (int32_t)b.lapTimes[i]);
     page.print(F("</tr>"));
   }
 
@@ -397,6 +424,7 @@ static void printComparison(Print &page, const char *nameA, const char *nameB) {
   page.print(F("<tr class='total'><td>" TR_W_BEST "</td>"));
   printTimeCell(page, true, bestA, bestA < bestB);
   printTimeCell(page, true, bestB, bestB < bestA);
+  printGapCell(page, true, (int32_t)bestA - (int32_t)bestB);
   page.print(F("</tr></table></div>"));
 }
 

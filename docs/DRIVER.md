@@ -1,137 +1,134 @@
 # Come funzionano i driver
 
-Cosa succede quando cambi una riga in `Config.h`, e come aggiungere un componente nuovo. Per la lista di cosa è compatibile vedi [HARDWARE.md](HARDWARE.md); per il resto del codice [ARCHITETTURA.md](ARCHITETTURA.md).
+Come il firmware trova i componenti, come sono organizzati i driver e come se ne aggiunge uno. Per la lista di cosa è compatibile vedi [HARDWARE.md](HARDWARE.md); per il resto del codice [ARCHITETTURA.md](ARCHITETTURA.md).
+
+*English version: [en/DRIVERS.md](en/DRIVERS.md).*
 
 ## L'idea
 
-**Il preprocessore cancella il driver che non hai scelto prima che il compilatore lo veda.** Nessuna scelta a runtime, nessuna classe virtuale: nel programma finito esiste una sola `weatherSensor::read()`, e il resto del firmware la chiama senza sapere per quale chip è stata compilata.
+**Ogni componente che si può riconoscere, si riconosce all'avvio.** Per ogni categoria c'è un elenco di driver; all'accensione il firmware li prova in ordine e usa il primo che risponde. Il resto del firmware chiama sempre le stesse funzioni (`weatherSensor::read()`, `imu::read()`...) senza sapere quale chip c'è dietro.
 
-Ogni categoria di componente è una coppia di file in `src/drivers/`:
+```
+src/drivers/
+  I2cBus.*            le poche transazioni I2C che servono a tutti
+  WeatherSensor.*     il contratto del sensore meteo e l'elenco dei candidati
+  weather/            un file per famiglia di chip: Sensirion, Aht, Hdc1080,
+                      Si70xx, Htu31, Am2320, Bme280, Dht
+  Imu.*               il contratto dell'IMU e l'elenco
+  imu/                Bno055, Bno08x, Mpu6050, Icm20948, Lsm6ds
+  GpsModule.*         velocità, famiglia e frequenza del GPS
+  gps/                Ublox, OtherFamilies (CASIC e Airoha)
+  Display.*           il pannello OLED
+```
 
-- un **`.h`** che dichiara cosa il driver offre: è il *contratto*, identico per tutti i chip della categoria;
-- un **`.cpp`** che lo implementa, con un blocco `#if` per chip.
+Un **file per famiglia**: aggiungere un chip vuol dire aggiungere un file, senza toccare gli altri. La famiglia è l'unità giusta perché i chip di uno stesso produttore spesso condividono protocollo e registri (SHT4x, SHT3x e SHTC3 parlano allo stesso modo; MPU6050, MPU6500 e ICM-20602 hanno gli stessi registri).
 
-Chi usa un driver include solo il `.h`. L'oggetto della libreria, i suoi `#include` e ogni dettaglio del chip restano chiusi nel `.cpp`.
+## Il contratto
 
-## Come si sceglie
-
-`Config.h` accende una macro per categoria:
+Ogni file di famiglia definisce una sola struttura `Driver` con tre o quattro puntatori a funzione:
 
 ```cpp
-#if !defined(WEATHER_DHT22) && !defined(WEATHER_SHT31)
-  #define WEATHER_DHT22
-// #define WEATHER_SHT31
-#endif
+// src/drivers/weather/WeatherDrivers.h
+struct Driver {
+  const char *(*detect)();                           // nome se c'è, nullptr se no
+  bool (*read)(float &temperature, float &humidity);
+  uint32_t intervalMs;                                // ogni quanto leggerlo
+};
 ```
 
-Il `#if !defined(...)` attorno serve a un caso solo: se la macro arriva già dalla riga di comando (`-DWEATHER_SHT31`), qui non se ne definisce nessuna e vince quella. Senza, si accenderebbero due driver insieme.
+`detect()` cerca il chip, lo prepara e restituisce il nome da mostrare all'avvio. Il file della categoria (`WeatherSensor.cpp`, `Imu.cpp`) tiene l'elenco dei driver e chiama `detect()` su ognuno finché uno risponde. Le funzioni interne di ogni file sono `static`: fuori dal file esiste solo la sua `Driver`.
 
-Nel `.cpp` sopravvive un solo ramo:
+Le regole che la firma da sola non dice (sono anche negli header):
+
+1. **`detect()` deve riconoscere il chip, non solo un indirizzo che risponde.** Un ACK all'indirizzo `0x40` può venire da quattro chip diversi: serve un registro d'identità, o una risposta con un CRC che torna.
+2. **`weatherSensor::read()` riceve i parametri già pieni** con gli ultimi valori buoni e sovrascrive solo ciò che ha letto davvero.
+3. **I sensori meteo leggono in due tempi**: ogni chiamata raccoglie la misura avviata dalla chiamata precedente e ne avvia una nuova. Nessun driver aspetta la conversione (fino a 80 ms sull'AHT20) bloccando il ciclo che legge l'IMU.
+4. **`imu::read()` consegna gli angoli della moto** (`Kind::Angles`, solo il BNO055) **o i dati grezzi negli assi del chip** (`Kind::Raw`): accelerometro in m/s² con la gravità, giroscopio in rad/s già senza lo zero. Assi e filtro d'assetto li fa `src/Motion`, una volta per tutti.
+5. **`name()`** compare nella schermata d'avvio: al massimo 11 caratteri.
+
+## Il riconoscimento
+
+L'ordine conta dove più chip condividono un indirizzo:
+
+| Indirizzo | Chi c'è | Come si distinguono |
+|---|---|---|
+| `0x40` | HDC1080, HTU31D, Si7021/HTU21D | HDC1080: registro produttore `0x5449`. HTU31D: numero di serie con CRC. Si70xx: registro utente, poi l'ID elettronico (solo il Si7021 ce l'ha) per il nome. Provati in quest'ordine, dal test più sicuro al più debole |
+| `0x44` | SHT4x, SHT3x | Si chiede il numero di serie con il comando dell'SHT4x: solo un SHT4x risponde con due parole il cui CRC torna |
+| `0x68` / `0x69` | ICM-20948, famiglia MPU | ICM-20948: registro 0 = `0xEA`. MPU: registro `0x75` |
+| `0x76` / `0x77` | BME280, BMP280 | Chip-ID `0x60` o `0x58`. Il BMP280 non ha umidità: viene riconosciuto e spiegato sul monitor seriale, non usato |
+
+Il **DHT** è provato per ultimo: non è sul bus, e l'unico modo di sapere se c'è è leggerlo (circa un secondo quando manca).
+
+Per il **GPS** il riconoscimento è diverso perché non c'è un indirizzo: si prova a leggere NMEA alle velocità più comuni, poi si chiede la versione col protocollo u-blox, e i comandi delle altre famiglie si mandano tutti (ognuna ignora quelli che non conosce). Infine si **misura** la frequenza ottenuta: è l'unico numero che conta, qualunque cosa il modulo abbia fatto coi comandi.
+
+## Perché senza librerie
+
+I sensori meteo e le IMU senza fusione sono scritti **senza libreria**: qualche decina di righe ciascuno, dal datasheet. Tre motivi:
+
+- **Flash**: per riconoscerli bisogna averli tutti nel firmware. Una libreria per chip (con le sue dipendenze) costerebbe decine di KB; il C3 è già al 95%.
+- **Controllo**: le letture in due tempi, che non bloccano il ciclo, non le offre nessuna delle librerie di questi sensori.
+- **Verifica**: la parte che può sbagliare in silenzio, cioè conversioni, checksum e assetto, sta in `src/core/` (`SensorMath`, `Ahrs`, `GpsCommands`) ed è provata sul PC contro gli esempi dei datasheet.
+
+Restano su libreria i chip dove scriverlo a mano non conviene: **BNO055** e **BNO085** (protocolli complessi), **DHT** (temporizzazioni al microsecondo), i **display** (Adafruit GFX disegna le pagine) e il parser **NMEA** (TinyGPS++).
+
+## Le scelte rimaste in `Config.h`
+
+Solo ciò che non si può chiedere al componente:
+
+| Macro | Perché non si riconosce |
+|---|---|
+| `DISPLAY_SSD1306` · `SH1106` · `SSD1309` · `SH1107` | Controller diversi rispondono allo stesso indirizzo e non hanno un registro d'identità leggibile |
+| `DISPLAY_SPI` | Su SPI non c'è acknowledge: un pannello assente non si nota |
+| `IMU_WITH_BNO055` · `IMU_WITH_BNO08X` | Si riconoscono, ma le loro librerie costano flash: si includono solo se servono |
+| `SD_CARD` / `NO_SD_CARD` | Come sopra: il supporto FAT costa ~50 KB |
+| `IMU_MOUNT_*`, `IMU_AXES`, `SIGN_*` | Come è montata la scatola: nessun sensore lo sa |
+| `POWER_SENSE_PIN` | Un partitore non ha niente da rispondere |
+
+## Aggiungere un sensore meteo
+
+Esempio: un Sensirion SHT85, che parla come l'SHT3x ma risponde solo a `0x44`.
+
+**1. Un file** `src/drivers/weather/Sht85.cpp` (o un caso in più in `Sensirion.cpp`, se il protocollo è lo stesso), copiando la famiglia più simile:
 
 ```cpp
-#if defined(WEATHER_DHT22)
-  #include <DHT.h>
-  static DHT sensor(PIN_DHT, DHT22);
-  #define WEATHER_NAME "DHT22"
-
-#elif defined(WEATHER_SHT4X)
-  #include <Adafruit_SHT4x.h>
-  static Adafruit_SHT4x sensor;
-  #define WEATHER_NAME "SHT4x"
-  ...
-#endif
+namespace weatherSensor {
+static const char *detect() { /* identità del chip */ }
+static bool read(float &temperature, float &humidity) { /* due tempi */ }
+const Driver SHT85 = { detect, read, 1000 };
+}
 ```
 
-Il codice del sensore non scelto non viene compilato e la sua libreria non viene nemmeno inclusa.
+**2. La conversione** in `src/core/SensorMath`, con un test in `test/test_core/` che usi l'esempio del datasheet.
 
-**Perché l'oggetto si chiama sempre `sensor`.** Con lo stesso nome in ogni ramo, `read()` si scrive una volta per famiglia di API invece che una per chip: i sensori con `readTemperature()` / `readHumidity()` condividono un corpo, quelli con l'API *unified sensor* di Adafruit un altro. Otto sensori, due funzioni di lettura.
+**3. Una riga** in `WeatherDrivers.h` (`extern const Driver SHT85;`) e una nell'elenco di `WeatherSensor.cpp`, al posto giusto rispetto ai chip con lo stesso indirizzo.
 
-`Config.h` non include nessuna libreria: essendo incluso ovunque, si tirerebbe dietro quella del display in ogni modulo.
+**4. La verifica**: `pio test -e native` e la compilazione su tutte le schede.
 
-## Le categorie
-
-| Categoria | Macro | File | Contratto |
-|---|---|---|---|
-| Meteo | `WEATHER_DHT22` · `SHT4X` · `SHT31` · `HTU31D` · `SI7021` · `HTU21D` · `AHT20` · `BME280` | `WeatherSensor` | `weatherSensor::begin`, `read`, `name` |
-| Display | `DISPLAY_SSD1306` · `SSD1309` · `SH1106` · `SH1107` | `Display` | `displayBegin`, `displayName`, l'oggetto `display` e il tipo `DisplayDriver` |
-| IMU | `IMU_BNO055` | `Imu` | `imu::begin`, `read`, `calibrationLevel`, `printCalibration`, `name` |
-| GPS | `GPS_UBLOX` · `GPS_UBLOX_M10` · `GPS_NMEA_GENERIC` | `GpsModule` | `gpsModule::configure`, `name`, l'oggetto `gpsSerial` |
-
-Il contratto contiene **solo ciò che è specifico del chip**. Il disegno delle pagine sono primitive Adafruit_GFX uguali su tutti i pannelli; la lettura del GPS è NMEA standard; il filtro anti-buca non riguarda l'IMU. Tutto questo sta nel codice comune.
-
-Quattro regole che la firma da sola non dice (sono anche negli header):
-
-1. **`name()`** serve alla schermata di avvio. Lo dichiara il driver, così cambiando macro la scritta cambia da sola. Al massimo 11 caratteri.
-2. **`weatherSensor::read()` riceve i parametri già pieni** con gli ultimi valori buoni e sovrascrive solo ciò che ha letto davvero: un sensore può dare una grandezza valida e l'altra no.
-3. **`imu::read()` consegna quattro grandezze riferite alla moto, non al chip**: piega positiva a destra, beccheggio positivo col muso su, accelerazione positiva in avanti e a destra. Tradurre dagli assi del sensore è il lavoro del driver. I `SIGN_*` invertono un verso; scambiare due assi non è un'inversione di segno e va risolto nel driver.
-4. **`DisplayDriver` deve esporre `getBuffer()`**: lo usa la transizione fra pagine.
-
-Due macro possono condividere lo stesso ramo: `DISPLAY_SSD1309` usa il blocco dell'SSD1306, perché quel controller si pilota con la stessa libreria. La macro separata esiste solo per scrivere in `Config.h` che pannello c'è davvero.
-
-Restano in `Config.h`, e non nel driver, le scelte di chi monta la scatola: le macro, pin e indirizzi I2C, `WEATHER_INTERVAL_MS` (limite fisico del sensore), `GPS_RATE_HZ` e `GPS_FIX_TIMEOUT_MS`, `IMU_MOUNT_*` e `SIGN_*`.
-
-## Aggiungere un driver
-
-Esempio: un SHT85 fra i sensori meteo.
-
-**1. Un ramo** in `src/drivers/WeatherSensor.cpp`, copiando quello del sensore più simile:
-
-```cpp
-#elif defined(WEATHER_SHT85)
-  #include <Adafruit_SHT31.h>      // stessa libreria dello SHT31
-  static Adafruit_SHT31 sensor;
-  #define WEATHER_NAME "SHT85"
-```
-
-**2. Se l'accensione è diversa**, il suo caso in `begin()`. Se la lettura usa una delle due API già presenti, `read()` non si tocca.
-
-**3. La macro** in `Config.h`, in due punti: la catena di scelta e il controllo in fondo al file (*SANITY CHECKS*), che dà un errore leggibile se le commenti tutte. Se serve, anche il suo indirizzo I2C.
-
-**4. La libreria** in `lib_deps` di `platformio.ini`.
-
-**5. La verifica**, di tutte le combinazioni e non solo della tua:
-
-```bash
-arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 --build-property "compiler.cpp.extra_flags=-DWEATHER_SHT85" .
-```
+Per un'IMU è lo stesso in `src/drivers/imu/`: `detect()` imposta il chip e misura lo zero del giroscopio con `measureGyroBias()`, `read()` consegna `Kind::Raw`.
 
 ### La matrice di compilazione
 
-Un driver si può verificare senza il componente solo compilandolo: se una combinazione non compila, la modularità è solo apparente. Ogni versione viene compilata in venti combinazioni:
+Un driver si può verificare senza il componente solo compilandolo. Ogni versione viene compilata nelle combinazioni che cambiano il codice compilato:
 
 | Cosa varia | Valori |
 |---|---|
 | Scheda | `esp32doit-devkit-v1` · `esp32s3` · `esp32s2` · `esp32c3` |
 | Lingua | `LANG_IT` · `LANG_EN` |
-| Meteo | le otto macro `WEATHER_*` |
-| Display | le quattro macro `DISPLAY_*` |
-| GPS | le tre macro `GPS_*` |
-| Montaggio IMU | `IMU_MOUNT_UPSIDE_DOWN` · `IMU_MOUNT_UPRIGHT` · `IMU_MOUNT_MANUAL` |
+| Display | `DISPLAY_SH1106`, `DISPLAY_SPI` e la loro combinazione |
+| IMU con libreria | `IMU_WITH_BNO08X` |
+| microSD | `NO_SD_CARD` |
+| Altro | `POWER_SENSE_PIN`, `IMU_MOUNT_UPRIGHT` |
 
-Compilare nelle due lingue controlla anche che i due file di testi definiscano le stesse chiavi.
-
-### Senza il sensore e senza la sua libreria
-
-Il ramo di un sensore che non hai non compila per un motivo banale: la libreria non è installata. Invece di installarla basta uno **stub header** con le sole firme usate, tenuto fuori dal progetto e passato con `-I`:
-
-```bash
-arduino-cli compile --fqbn esp32:esp32:esp32doit-devkit-v1 --build-property "compiler.cpp.extra_flags=-DWEATHER_SHT85 -I/percorso/stub" .
-```
-
-Verifica ciò che conta: che le macro escludano il driver giusto, che non ci siano doppie definizioni, che il contratto sia rispettato. Il binario risulta più piccolo, ma solo perché lo stub è vuoto.
+I sensori meteo e le IMU senza libreria non hanno combinazioni: sono sempre tutti compilati.
 
 ## Errori tipici
 
 | Errore | Causa quasi certa |
 |---|---|
-| `redefinition of 'sensor'` o `'WEATHER_NAME' redefined` | Due driver accesi insieme |
-| `undefined reference to 'weatherSensor::begin()'` | Nessun ramo compilato: il nome della macro nel `.cpp` non combacia con quello in `Config.h` |
-| `'sensor' was not declared in this scope` | Come sopra |
+| `undefined reference to 'weatherSensor::XYZ'` | Il driver è nell'elenco ma il suo file non definisce la `Driver` con quel nome |
 | `'X' was not declared in this scope` in un modulo | Manca l'`#include` dell'header che lo dichiara |
-| `#error "Config.h: no ... driver selected"` | Hai commentato tutte le alternative di una categoria |
+| `#error "Config.h: no display controller selected"` | Hai commentato tutte le macro `DISPLAY_*` |
+| `#error "Config.h: the C3 has no free pins..."` | microSD o display SPI attivati su un C3 |
 | `#error "Config.h: select only one language"` | `LANG_IT` e `LANG_EN` accesi insieme |
 | `'TR_...' was not declared` | Una chiave di testo esiste in un file lingua ma non nell'altro |
-
-## Perché non classi ed ereditarietà
-
-Una classe base astratta con una sottoclasse per chip sarebbe la soluzione da manuale. È stata scartata di proposito: il sensore non cambia mentre la moto va, quindi la scelta è nota a tempo di compilazione e risolverla lì costa zero byte. Con le classi finirebbero nel binario tutti i driver con le loro librerie, più una vtable, per un beneficio nullo.
+| Componente presente ma riga con la croce all'avvio | Indirizzo occupato da un altro chip, o cablaggio: il monitor seriale dice cosa è stato trovato |

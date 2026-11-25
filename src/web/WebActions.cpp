@@ -10,6 +10,7 @@
 #include "../SessionFormat.h"
 #include "../Sessions.h"
 #include "../Stats.h"
+#include "../Storage.h"
 #include "../Tracks.h"
 #include "../Weather.h"
 #include "../core/Geo.h"
@@ -206,7 +207,7 @@ void handleDownload() {
   if (!requestedLog(path, sizeof(path))) return;
 
   if (!sessions::isCurrentFormat(path + 1)) {
-    File file = LittleFS.open(path, FILE_READ);
+    File file = storage::sessions().open(path, FILE_READ);
     if (!file) {
       server.send(500, CONTENT_TEXT, TR_E_READ_ERROR);
       return;
@@ -290,7 +291,7 @@ void handleDelete() {
   char path[32];
   if (!requestedLog(path, sizeof(path))) return;
 
-  bool removed = LittleFS.remove(path);
+  bool removed = storage::sessions().remove(path);
   Serial.print(removed ? F("Deleted ") : F("ERROR deleting "));
   Serial.println(path);
 

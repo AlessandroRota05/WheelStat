@@ -3,11 +3,13 @@
 /*
   WheelStat - src/drivers/WeatherSensor.h
   ===========================================================================
-  Temperature/humidity sensor contract. The chip is picked in Config.h
-  (WEATHER_*); exactly one implementation is compiled.
+  Temperature/humidity sensor contract. There is no choice to make in
+  Config.h: at boot every known sensor is looked for, and the first one
+  that answers is used. The chips live one family per file in weather/.
 
-  Only the DHT22 is tested on hardware. The others compile and honour the
-  contract: check them on first assembly (I2C address first).
+  Only the DHT22 is tested on hardware. The others follow their datasheets
+  and their arithmetic is checked on a PC (src/core/SensorMath): check them
+  on first assembly.
   ===========================================================================
 */
 
@@ -15,17 +17,25 @@
 
 namespace weatherSensor {
 
-// False when the sensor is not there: I2C ones because nothing answers on
-// the address, the DHT22 - which has no address - because it is actually
-// read and delivers NaN.
+// Looks for a sensor. False when none answers.
 bool begin();
 
 // The parameters arrive ALREADY FILLED with the last good values and only
 // what was really read is overwritten: a sensor can deliver one valid
-// quantity and NaN for the other. False if nothing could be read.
+// quantity and not the other. False if nothing new was read.
+//
+// Most sensors measure in two phases - a call collects the measurement the
+// previous call started, and starts the next - so nobody waits for a
+// conversion. Values are therefore one interval old, which for the weather
+// does not matter.
 bool read(float &temperature, float &humidity);
 
-// Name shown on the boot checklist (about 11 characters at most).
+// How often to call read(): a property of the sensor (the DHT22 repeats
+// its last value if asked more often than every 2 s).
+uint32_t intervalMs();
+
+// Name shown on the boot checklist (about 11 characters at most), or "-"
+// when nothing was found.
 const char *name();
 
 }  // namespace weatherSensor

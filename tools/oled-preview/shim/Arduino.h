@@ -50,4 +50,8 @@ inline size_t strlcpy(char *dst, const char *src, size_t size) {
   }
   return len;
 }
+inline size_t strlcat(char *dst, const char *src, size_t size) {
+  size_t used = strnlen(dst, size);
+  return used + strlcpy(dst + used, src, size - used);
+}
 #endif

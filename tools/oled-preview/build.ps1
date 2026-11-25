@@ -2,7 +2,7 @@
 #
 #   powershell -File tools/oled-preview/build.ps1
 #
-# Needs g++ (MinGW is fine), Python 3 with Pillow, and the Adafruit GFX
+# Needs g++ (MinGW is fine), Python 3 with Pillow and segno, and the Adafruit GFX
 # library where the Arduino IDE installs it. Writes Media/oled/<lang>/.
 
 param(
@@ -28,6 +28,10 @@ $sources = @(
   "$repo\src\Channels.cpp",
   "$GfxLibrary\Adafruit_GFX.cpp"
 )
+
+# The QR page asks qr_matrix.py (segno) for the code: see shim/qrcode.h.
+$env:WHEELSTAT_PYTHON = (Get-Command $Python).Source
+$env:WHEELSTAT_QR_SCRIPT = "$here\qr_matrix.py"
 
 foreach ($lang in "it", "en") {
   $frames = Join-Path $work $lang

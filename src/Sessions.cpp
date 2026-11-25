@@ -1,6 +1,7 @@
 #include "Sessions.h"
 
 #include "SessionFormat.h"
+#include "Storage.h"
 
 namespace sessions {
 
@@ -23,11 +24,11 @@ bool resolvePath(const char *requested, char *path, size_t size) {
   // Session logs only, and no walking around the filesystem.
   if (!isLogFile(path + 1)) return false;
   if (strstr(path, "..") != nullptr) return false;
-  return LittleFS.exists(path);
+  return storage::sessions().exists(path);
 }
 
 bool open(const char *path, Opened &opened) {
-  opened.file = LittleFS.open(path, FILE_READ);
+  opened.file = storage::sessions().open(path, FILE_READ);
   if (!opened.file) return false;
 
   core::SessionHeader &header = opened.header;
@@ -94,7 +95,7 @@ int list(const Entry *&entries) {
   entries = listed;
   int count = 0;
 
-  File root = LittleFS.open("/");
+  File root = storage::sessions().open("/");
   if (!root) return 0;
 
   File file = root.openNextFile();

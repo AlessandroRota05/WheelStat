@@ -18,7 +18,6 @@
 #define TR_O_CAL_ANY_KEY      "[tasto] per iniziare"
 
 // --- Barra di stato ---
-#define TR_O_STATUS_IDLE      "IDLE "
 
 // --- Righe e sigle comuni ---
 #define TR_O_ROW_LEAN         "Piega"
@@ -70,11 +69,13 @@
 #define TR_O_RECORDS_2        "RECORD 2/2"
 
 #define TR_O_STORAGE_TITLE    "MEMORIA"
-#define TR_O_FREE_KB          " KB lib."
+#define TR_O_FREE             "Libera"
 #define TR_O_ERROR            "ERRORE!"
 #define TR_O_FILE             "File"
-#define TR_O_MINUTES          "Minuti"
-#define TR_O_PAUSED           "IN PAUSA"
+#define TR_O_TIME_LEFT        "Resta"
+#define TR_O_QR_1             "Inquadra"
+#define TR_O_QR_2             "col"
+#define TR_O_QR_3             "telefono"
 
 #define TR_O_WIFI_TITLE       "WIFI"
 #define TR_O_NETWORK          "Rete"
@@ -111,6 +112,7 @@
 
 // --- Messaggi fissi ---
 #define TR_O_UPDATING         "AGGIORNAMENTO..."
+#define TR_O_POWER_SAVED      "SESSIONE SALVATA"
 
 // ===========================================================================
 // Canali (tabelle del sito)
@@ -159,6 +161,8 @@
   "noGps:'Nessuna posizione GPS in questo tratto',all:'Tutta la sessione'," \
   "lap:'Giro',laps:'Tempi sul giro',free:'libera',duration:'Durata'," \
   "maxSpeed:'Velocità max',maxLean:'Piega max',right:'dx',left:'sx',best:'Giro migliore'," \
+  "ideal:'Giro ideale',compare:'Confronta con',time:'Tempo',gap:'Distacco'," \
+  "deltaOf:'Distacco del giro',deltaOn:'sul giro'," \
   "hint:'Tocca o scorri un grafico per leggere i valori in quel punto.'," \
   "range:'Mostra',speed:'Velocità (km/h)',lean:'Piega (°)',leanShort:'piega'," \
   "pitch:'Impennata (+) / stoppie (-) (°)',g:'Forze G',glat:'laterale'," \
@@ -191,7 +195,7 @@
   "{wait:'In attesa di punti GPS...',noFix:'NO FIX'," \
   "evW:'Impennate',evS:'Stoppie',evL:'Pieghe',evB:'Frenate brusche'," \
   "evA:'Accelerate brusche',lap:'Giro',last:'Ultimo',best:'Record'," \
-  "sectors:'Settori',right:'Dx',left:'Sx'," \
+  "ideal:'Ideale',top:'migliore',right:'Dx',left:'Sx'," \
   "online:'Collegato',offline:'Connessione persa'," \
   "noFinish:'Traguardo non impostato (pagina GIRI sul display, o scheda Tracciati)'}"
 

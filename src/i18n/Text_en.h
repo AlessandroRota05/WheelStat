@@ -18,7 +18,6 @@
 #define TR_O_CAL_ANY_KEY      "[any key] to start"
 
 // --- Status bar ---
-#define TR_O_STATUS_IDLE      "IDLE "
 
 // --- Shared rows and short labels ---
 #define TR_O_ROW_LEAN         "Lean"
@@ -70,11 +69,13 @@
 #define TR_O_RECORDS_2        "RECORDS 2/2"
 
 #define TR_O_STORAGE_TITLE    "STORAGE"
-#define TR_O_FREE_KB          " KB free"
+#define TR_O_FREE             "Free"
 #define TR_O_ERROR            "ERROR!"
 #define TR_O_FILE             "File"
-#define TR_O_MINUTES          "Minutes"
-#define TR_O_PAUSED           "IDLE"
+#define TR_O_TIME_LEFT        "Left"
+#define TR_O_QR_1             "Scan with"
+#define TR_O_QR_2             "your"
+#define TR_O_QR_3             "phone"
 
 #define TR_O_WIFI_TITLE       "WIFI"
 #define TR_O_NETWORK          "Net"
@@ -111,6 +112,7 @@
 
 // --- Standing messages ---
 #define TR_O_UPDATING         "UPDATING..."
+#define TR_O_POWER_SAVED      "SESSION SAVED"
 
 // ===========================================================================
 // Channels (website tables)
@@ -159,6 +161,8 @@
   "noGps:'No GPS position in this stretch',all:'Whole session'," \
   "lap:'Lap',laps:'Lap times',free:'free',duration:'Duration'," \
   "maxSpeed:'Top speed',maxLean:'Max lean',right:'right',left:'left',best:'Best lap'," \
+  "ideal:'Ideal lap',compare:'Compare with',time:'Time',gap:'Gap'," \
+  "deltaOf:'Gap of lap',deltaOn:'to lap'," \
   "hint:'Touch or slide along a chart to read the values at that point.'," \
   "range:'Show',speed:'Speed (km/h)',lean:'Lean (°)',leanShort:'lean'," \
   "pitch:'Wheelie (+) / stoppie (-) (°)',g:'G-forces',glat:'lateral'," \
@@ -191,7 +195,7 @@
   "{wait:'Waiting for GPS points...',noFix:'NO FIX'," \
   "evW:'Wheelies',evS:'Stoppies',evL:'Leans',evB:'Hard braking'," \
   "evA:'Hard acceleration',lap:'Lap',last:'Last',best:'Best'," \
-  "sectors:'Sectors',right:'R',left:'L'," \
+  "ideal:'Ideal',top:'best',right:'R',left:'L'," \
   "online:'Connected',offline:'Connection lost'," \
   "noFinish:'Finish line not set (LAPS page on the display, or the Tracks tab)'}"
 

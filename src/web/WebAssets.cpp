@@ -31,15 +31,45 @@ html{background:var(--bg)}
 a{color:var(--accent);text-decoration:none}
 a:active{opacity:.7}
 
-/* Shared header: brand + tab navigation */
-.topbar{display:flex;align-items:center;justify-content:space-between;
-  margin-bottom:16px;flex-wrap:wrap;gap:8px}
-.brand{font-size:19px;font-weight:700}
+/* Shared header: brand + tab navigation. It stays at the top while the
+   page scrolls, on a blurred band so the content passes under it. */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  position:sticky;top:0;z-index:5;margin:-16px -16px 14px;padding:12px 16px;
+  background:rgba(13,16,21,.88);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border)}
+.brand{font-size:19px;font-weight:700;white-space:nowrap}
 .brand span{color:var(--accent)}
-nav.tabs{display:flex;gap:6px;flex-wrap:wrap}
-nav.tabs a{font-size:13px;padding:6px 12px;border-radius:999px;color:var(--dim);
-  background:var(--card);border:1px solid var(--border)}
+/* One row, always: an icon per tab, and the name next to it. On a narrow
+   phone only the open tab keeps its name - five names do not fit on one
+   line, and wrapping would push the page down. */
+nav.tabs{display:flex;gap:6px}
+nav.tabs a{display:flex;align-items:center;gap:6px;font-size:13px;padding:7px 11px;
+  border-radius:999px;color:var(--dim);background:var(--card);border:1px solid var(--border)}
+nav.tabs svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
 nav.tabs a.on{color:var(--ink);background:var(--accent);border-color:var(--accent);font-weight:600}
+@media (max-width:620px){nav.tabs a:not(.on) span{display:none}}
+/* The narrowest phones: icons only, the open tab still lit */
+@media (max-width:430px){
+  nav.tabs{gap:4px}
+  nav.tabs a{padding:8px 9px}
+  nav.tabs a span{display:none}
+  .brand{font-size:17px}
+}
+
+/* The content comes in with a short fade: enough to see the page changed,
+   too short to wait for. */
+main{animation:enter .22s ease-out both}
+@keyframes enter{from{opacity:0;transform:translateY(5px)}}
+
+/* Waiting for something (a session file can take a few seconds) */
+.spin{display:inline-block;width:14px;height:14px;margin-right:8px;vertical-align:-2px;
+  border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;
+  animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Visible focus for keyboard users, invisible for touch */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
 h2{font-size:13px;margin:20px 0 8px;color:var(--dim);text-transform:uppercase;
   letter-spacing:.6px;font-weight:600}
@@ -68,7 +98,8 @@ p{line-height:1.45}
 /* Gauge under the lean value: grows from the centre towards the side of
    the lean, full scale 60 degrees. */
 .lean{position:relative;height:6px;border-radius:3px;background:var(--card2);margin:8px 6px 0}
-.lean i{position:absolute;top:0;bottom:0;border-radius:3px;background:var(--accent)}
+.lean i{position:absolute;top:0;bottom:0;border-radius:3px;background:var(--accent);
+  transition:width .25s ease-out,left .25s ease-out,background-color .25s}
 .lean:after{content:'';position:absolute;left:50%;top:-3px;bottom:-3px;width:1px;background:var(--dim)}
 
 /* Connection state of the live page: without it a dropped WiFi would leave
@@ -83,10 +114,15 @@ p{line-height:1.45}
 .pairs div{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.3px}
 .pairs b{display:block;font-size:17px;color:var(--text);text-transform:none;letter-spacing:0;
   margin-top:2px;font-variant-numeric:tabular-nums}
+/* Gap next to a sector time: green = best of the session, yellow = slower */
+.pairs small{font-size:12px;font-weight:600;margin-left:5px}
+.pairs small.up{color:var(--good)} .pairs small.down{color:var(--warn)}
 
 /* Fill level of the storage */
 .meter{height:6px;border-radius:3px;background:var(--card2);overflow:hidden;margin-top:6px}
-.meter i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.meter i{display:block;height:100%;background:var(--accent);border-radius:3px;
+  animation:grow .6s ease-out both}
+@keyframes grow{from{width:0}}
 .meter.full i{background:var(--danger)}
 
 canvas{width:100%;display:block;background:var(--card);border:1px solid var(--border);
@@ -97,6 +133,18 @@ canvas{width:100%;display:block;background:var(--card);border:1px solid var(--bo
 ul.list{list-style:none;margin:0;padding:0}
 ul.list li{background:var(--card);border:1px solid var(--border);border-radius:12px;
   padding:10px 12px;margin-bottom:8px;font-size:14px}
+
+/* A session: the card is the link to its charts, the rest is underneath */
+ul.list li.session{padding:0;overflow:hidden}
+li.session .open{display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:12px;color:var(--text);transition:background .12s}
+li.session a.open:active{background:var(--card2)}
+@media (hover:hover){li.session a.open:hover{background:var(--card2)}}
+li.session .go{color:var(--accent);font-size:13px;font-weight:600;white-space:nowrap}
+li.session .actions{display:flex;gap:18px;padding:8px 12px;border-top:1px solid var(--border);
+  font-size:12.5px}
+li.session .actions a{color:var(--dim)}
+li.session .actions a.danger{color:var(--danger)}
 
 /* A line with something on the left and the actions on the right */
 .row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
@@ -295,10 +343,29 @@ function fmtTime(ms){
  return Math.floor(s/60)+':'+(s%60<10?'0':'')+(s%60)+'.'+d;
 }
 
-function fmtSectors(d){
- var out=[];
- for(var i=0;i<d.sec.length;i++) out.push(fmtTime(d.sec[i]));
- return out.join(' / ');
+// The ideal lap: the best time of each sector in this session, added up.
+// Only once every sector has one, and only with checkpoints (a single
+// sector would just repeat the best lap).
+function idealLap(best){
+ if(best.length<2)return 0;
+ var sum=0;
+ for(var i=0;i<best.length;i++){if(!best[i])return 0;sum+=best[i];}
+ return sum;
+}
+
+// The sectors of the last lap, each with how far it was from the best of
+// the session: green when it IS the best, yellow with the gap otherwise.
+function sectorPairs(d){
+ if(d.sec.length<2||!d.lapNum)return '';
+ var l=[];
+ for(var i=0;i<d.sec.length;i++){
+  var gap=d.sec[i]-d.secBest[i],tag;
+  if(!d.sec[i])tag='';
+  else if(gap<=0)tag='<small class="up">'+T.top+'</small>';
+  else tag='<small class="down">+'+(gap/1000).toFixed(2)+'</small>';
+  l.push(['S'+(i+1),fmtTime(d.sec[i])+tag]);
+ }
+ return '<div class="gap"></div>'+pairs(l);
 }
 
 // --- GPS trace ---------------------------------------------------------------
@@ -444,10 +511,11 @@ async function tick(){
   if(d.lapSet){
    var l=[[T.lap+(d.lapCur?' '+(d.lapNum+1):''),fmtTime(d.lapCur)],[T.last,fmtTime(d.lapLast)],
           [T.best,fmtTime(d.lapBest)]];
-   if(d.sec.length>1)l.push([T.sectors,fmtSectors(d)]);
+   var ideal=idealLap(d.secBest);
+   if(ideal)l.push([T.ideal,fmtTime(ideal)]);
    var name=document.createElement('div');  // the name is typed by the user: as text
    name.className='dim';name.style.marginBottom='8px';name.textContent=d.trackName||'';
-   byId('laps').innerHTML=pairs(l);
+   byId('laps').innerHTML=pairs(l)+sectorPairs(d);
    if(d.trackName)byId('laps').prepend(name);
   }else byId('laps').textContent=T.noFinish;
 

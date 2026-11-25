@@ -35,23 +35,22 @@
 #endif
 
 // ===========================================================================
-// DRIVER SELECTION
+// COMPONENTS
 // ===========================================================================
-// One macro per category. Compatibility notes: docs/HARDWARE.md.
+// Most of the hardware is recognised at boot and needs nothing here:
+//   weather sensor  DHT22/DHT11, SHT4x/SHT3x/SHTC3, AHT10/20/21, HDC1080,
+//                   Si7021/HTU21D, HTU31D, AM2320, BME280
+//   IMU             BNO055, MPU6050 family, ICM-20948, LSM6DS family
+//                   (+ BNO085/086 if enabled below)
+//   GPS             speed, family (u-blox, CASIC, Airoha, generic NMEA), rate
+//   display         its I2C address
+//   microSD         whether a card is in
+// What the firmware found is on the boot screen and the serial monitor.
+// Compatibility notes: docs/HARDWARE.md.
 
-#if !defined(WEATHER_DHT22)  && !defined(WEATHER_SHT4X)  && !defined(WEATHER_SHT31) && \
-    !defined(WEATHER_HTU31D) && !defined(WEATHER_SI7021) && !defined(WEATHER_HTU21D) && \
-    !defined(WEATHER_AHT20)  && !defined(WEATHER_BME280)
-  #define WEATHER_DHT22     // fitted
-// #define WEATHER_SHT4X    // SHT40/41/45, the most accurate: the one to buy today
-// #define WEATHER_SHT31    // previous generation of the SHT4x
-// #define WEATHER_HTU31D   // good price/accuracy trade-off
-// #define WEATHER_SI7021   // reliable classic
-// #define WEATHER_HTU21D   // predecessor of the HTU31D
-// #define WEATHER_AHT20    // the cheapest, modest accuracy
-// #define WEATHER_BME280   // also measures pressure, which the firmware ignores
-#endif
-
+// The display controller is the one thing that cannot be asked: panels with
+// different controllers answer on the same address. 1.3" modules are
+// usually SH1106, 0.96" ones SSD1306.
 #if !defined(DISPLAY_SSD1306) && !defined(DISPLAY_SSD1309) && \
     !defined(DISPLAY_SH1106)  && !defined(DISPLAY_SH1107)
   #define DISPLAY_SSD1306  // fitted
@@ -60,19 +59,19 @@
 // #define DISPLAY_SH1107  // CAREFUL: almost always 128x128, which is not supported
 #endif
 
-// A single implementation today: the macro is the hook for the successor of
-// the BNO055, which is end-of-life.
-#if !defined(IMU_BNO055)
-  #define IMU_BNO055
-#endif
+// A display wired to SPI instead of I2C (pins below). Faster, but SPI
+// cannot tell whether a panel is there: it is assumed it is.
+// #define DISPLAY_SPI
 
-// The two u-blox generations do not cover each other: the M10 dropped the
-// old configuration messages. The wrong driver leaves the module at 1 Hz
-// while GPS_FIX_TIMEOUT_MS is tuned for the high rate, and the fix flickers.
-#if !defined(GPS_UBLOX) && !defined(GPS_UBLOX_M10) && !defined(GPS_NMEA_GENERIC)
-  #define GPS_UBLOX          // fitted: NEO-6M/8M, Beitian BN-220/BN-880
-// #define GPS_UBLOX_M10     // MAX-M10S, MIA-M10, Beitian M10 series
-// #define GPS_NMEA_GENERIC  // any non-u-blox module: stays at 1 Hz
+// The IMUs that need a library, which costs flash: each one enabled here
+// is looked for at boot. The others are always there (no library).
+#define IMU_WITH_BNO055      // Adafruit BNO055 - fitted
+// #define IMU_WITH_BNO08X   // Adafruit BNO08x - BNO085/086, about 10 KB of flash
+
+// Sessions on a microSD when a card is in (FAT32, any size). The card shares
+// the SPI bus with an SPI display. Not on the C3: it has no pins left.
+#if !defined(CONFIG_IDF_TARGET_ESP32C3) && !defined(NO_SD_CARD)
+  #define SD_CARD
 #endif
 
 // ===========================================================================
@@ -101,6 +100,14 @@
   constexpr uint8_t PIN_GPS_RX   = 18;
   constexpr uint8_t PIN_GPS_TX   = 17;
   constexpr uint8_t GPS_UART_NUM = 2;
+  // SPI bus, shared by the microSD and an SPI display (DISPLAY_SPI).
+  constexpr uint8_t PIN_SPI_SCK  = 12;
+  constexpr uint8_t PIN_SPI_MISO = 13;
+  constexpr uint8_t PIN_SPI_MOSI = 11;
+  constexpr uint8_t PIN_SD_CS    = 10;
+  constexpr int8_t  PIN_OLED_CS  = 14;
+  constexpr int8_t  PIN_OLED_DC  = 16;
+  constexpr int8_t  PIN_OLED_RST = 21;   // -1: tied to the board's reset
 
 #elif defined(CONFIG_IDF_TARGET_ESP32C3)
   // Only GPIO 0-21. Strapping: 2, 8, 9. Flash: 12-17. USB: 18, 19.
@@ -129,6 +136,14 @@
   constexpr uint8_t PIN_GPS_RX   = 18;
   constexpr uint8_t PIN_GPS_TX   = 17;
   constexpr uint8_t GPS_UART_NUM = 1;   // only two UARTs, like the C3
+  // SPI bus, shared by the microSD and an SPI display (DISPLAY_SPI).
+  constexpr uint8_t PIN_SPI_SCK  = 12;
+  constexpr uint8_t PIN_SPI_MISO = 13;
+  constexpr uint8_t PIN_SPI_MOSI = 11;
+  constexpr uint8_t PIN_SD_CS    = 10;
+  constexpr int8_t  PIN_OLED_CS  = 14;
+  constexpr int8_t  PIN_OLED_DC  = 16;
+  constexpr int8_t  PIN_OLED_RST = 21;   // -1: tied to the board's reset
 
 #elif defined(CONFIG_IDF_TARGET_ESP32)
   // Classic ESP32 (DevKit V1): the fitted board, the only one tested on
@@ -145,6 +160,16 @@
   constexpr uint8_t PIN_GPS_TX   = 17;
   constexpr uint8_t GPS_UART_NUM = 2;
 
+  // SPI bus, shared by the microSD and an SPI display (DISPLAY_SPI): the
+  // board's standard VSPI pins.
+  constexpr uint8_t PIN_SPI_SCK  = 18;
+  constexpr uint8_t PIN_SPI_MISO = 19;
+  constexpr uint8_t PIN_SPI_MOSI = 23;
+  constexpr uint8_t PIN_SD_CS    = 5;
+  constexpr int8_t  PIN_OLED_CS  = 26;
+  constexpr int8_t  PIN_OLED_DC  = 32;
+  constexpr int8_t  PIN_OLED_RST = 33;   // -1: tied to the board's reset
+
 #else
   // No silent fallback to the classic pinout: on an unlisted chip it would
   // boot and read sensors that were never connected.
@@ -154,33 +179,13 @@
 // ===========================================================================
 // I2C BUS
 // ===========================================================================
-// OLED, IMU and an I2C weather sensor share the bus: before buying a part,
-// check its address is free.
-constexpr uint8_t I2C_ADDR_OLED   = 0x3C;
-constexpr uint8_t I2C_ADDR_BNO055 = 0x28;  // 0x29 on some breakouts (ADR jumper)
-
-// Only the weather sensors whose library takes an address.
-constexpr uint8_t I2C_ADDR_SHT31  = 0x44;  // 0x45 with ADDR tied to VDD
-constexpr uint8_t I2C_ADDR_HTU31D = 0x40;  // 0x41 with ADDR tied to VDD
-constexpr uint8_t I2C_ADDR_AHT20  = 0x38;
-constexpr uint8_t I2C_ADDR_BME280 = 0x76;  // 0x77 with SDO tied to VDD
-
+// OLED, IMU and an I2C weather sensor share the bus. Addresses are found by
+// themselves; two parts on the SAME address do not work (docs/HARDWARE.md
+// has the map).
+//
 // 400 kHz: an OLED frame takes ~23 ms instead of ~90. Slower, 10 FPS do not
 // fit.
 constexpr uint32_t I2C_CLOCK_HZ = 400000;
-
-// ===========================================================================
-// WEATHER SENSOR TIMING
-// ===========================================================================
-// A physical limit of the part, which is why it is here and not in Tuning.h.
-
-#if defined(WEATHER_DHT22)
-  // Asked more often than every 2 s, the DHT22 repeats its last reading.
-  constexpr uint32_t WEATHER_INTERVAL_MS = 2000;
-#else
-  // Faster would only load the bus shared with OLED and IMU.
-  constexpr uint32_t WEATHER_INTERVAL_MS = 1000;
-#endif
 
 // ===========================================================================
 // DISPLAY
@@ -193,55 +198,62 @@ constexpr uint8_t SCREEN_HEIGHT = 64;
 constexpr uint8_t FONT_CHAR_WIDTH = 6;
 
 // ===========================================================================
+// POWER FROM THE BIKE (optional)
+// ===========================================================================
+// On the bike's 12 V, turning the key off cuts the power in the middle of a
+// recording: the last seconds and the session summary, lap times included,
+// are lost. With the wiring in docs/HARDWARE.md ("Alimentazione dalla moto")
+// - a divider from the switched 12 V to an ADC pin, and a capacitor that
+// keeps the board alive for a moment - the firmware sees the key go off and
+// closes the session first. Leave it commented out on USB power.
+//
+// It must be an ADC1 pin: ADC2 stops working while the WiFi is on.
+// Classic ESP32: 32-39. S3/S2: 1-10. C3: 0-4 (check against your pinout).
+// #define POWER_SENSE_PIN 34
+constexpr float POWER_SENSE_DIVIDER = (100.0f + 22.0f) / 22.0f;  // (R1 + R2) / R2, in kOhm
+constexpr float POWER_OFF_VOLTS     = 6.0f;  // below this the key is off; cranking stays above
+
+// ===========================================================================
 // IMU ORIENTATION - the first thing to set on a new build
 // ===========================================================================
 // Get it wrong and nothing fails: the numbers are just believable and false.
 // The procedure, with the four checks to do box in hand, is in the README
 // ("IMU orientation").
 
-// STEP 1: how the breakout sits. "Up" is the component side facing the sky.
+// STEP 1: how the breakout sits. "Up" is the component side facing the sky,
+// and the chip's X axis (printed on most breakouts) points to the front.
 #if !defined(IMU_MOUNT_UPRIGHT) && !defined(IMU_MOUNT_UPSIDE_DOWN) && \
     !defined(IMU_MOUNT_MANUAL)
   #define IMU_MOUNT_UPSIDE_DOWN   // fitted: board flipped over
 // #define IMU_MOUNT_UPRIGHT      // components up, board flat
-// #define IMU_MOUNT_MANUAL       // neither: pick the preset below
+// #define IMU_MOUNT_MANUAL       // neither: set the two lines below by hand
 #endif
 
-// The BNO055 remaps its axes inside the chip, with eight presets P0-P7.
+// The same position told to each kind of chip:
+//   IMU_BNO055_REMAP  the BNO055 turns its axes inside the chip, presets P0-P7
+//   IMU_AXES          every other IMU: which chip axis points {forward, left,
+//                     up}, 1 = X, 2 = Y, 3 = Z, minus when it points the
+//                     other way. Flipped over about X, Y and Z reverse.
 #if defined(IMU_MOUNT_UPSIDE_DOWN)
   #define IMU_BNO055_REMAP P5
+  #define IMU_AXES {1, -2, -3}
 #elif defined(IMU_MOUNT_UPRIGHT)
   #define IMU_BNO055_REMAP P1   // the chip's factory orientation
+  #define IMU_AXES {1, 2, 3}
 #elif defined(IMU_MOUNT_MANUAL)
   #define IMU_BNO055_REMAP P1   // <-- change here: P0 ... P7
+  #define IMU_AXES {1, 2, 3}    // <-- and here
 #endif
 
 // STEP 2: flip the ones that come out reversed. A sign reverses a direction;
 // two SWAPPED quantities (lean moves when the nose lifts) are a wrong step 1.
+// These four apply to the BNO055. For any other IMU a reversed direction is
+// fixed in IMU_AXES above: lean reversed -> change the sign of "left",
+// pitch reversed -> the sign of "forward" and "up" together.
 constexpr float SIGN_LEAN   =  1.0f;   // lean right must read positive
 constexpr float SIGN_PITCH  = -1.0f;   // nose up must read as a wheelie
 constexpr float SIGN_G_LONG =  1.0f;   // accelerating must read positive
 constexpr float SIGN_G_LAT  = -1.0f;   // pushed left, the G dot must go left
-
-// ===========================================================================
-// GPS MODULE
-// ===========================================================================
-
-constexpr uint32_t GPS_BAUD = 9600;  // NEO-6M/8M factory default
-
-#if defined(GPS_UBLOX) || defined(GPS_UBLOX_M10)
-  // 5 Hz fits in 9600 baud only because the driver turns off the sentences
-  // nobody reads; 10 Hz would need a higher baud rate.
-  constexpr uint8_t GPS_RATE_HZ = 5;
-
-  // 3.5 missed reports before the fix is called stale. Goes with GPS_RATE_HZ.
-  constexpr uint32_t GPS_FIX_TIMEOUT_MS = 700;
-
-#elif defined(GPS_NMEA_GENERIC)
-  // The rate cannot be set without UBX, and nearly every module ships at
-  // 1 Hz: with 700 ms the fix would go stale between one report and the next.
-  constexpr uint32_t GPS_FIX_TIMEOUT_MS = 3000;
-#endif
 
 // ===========================================================================
 // ACCESS POINT
@@ -259,19 +271,17 @@ constexpr char WIFI_DEFAULT_NAME[] = "WheelStat";
   #error "Config.h: select only one language (LANG_IT or LANG_EN)"
 #endif
 
-#if !defined(WEATHER_DHT22)  && !defined(WEATHER_SHT4X)  && !defined(WEATHER_SHT31) && \
-    !defined(WEATHER_HTU31D) && !defined(WEATHER_SI7021) && !defined(WEATHER_HTU21D) && \
-    !defined(WEATHER_AHT20)  && !defined(WEATHER_BME280)
-  #error "Config.h: no weather driver selected (see DRIVER SELECTION)"
-#endif
-
 #if !defined(DISPLAY_SSD1306) && !defined(DISPLAY_SSD1309) && \
     !defined(DISPLAY_SH1106)  && !defined(DISPLAY_SH1107)
-  #error "Config.h: no display driver selected (see DRIVER SELECTION)"
+  #error "Config.h: no display controller selected (see COMPONENTS)"
 #endif
 
-#if !defined(GPS_UBLOX) && !defined(GPS_UBLOX_M10) && !defined(GPS_NMEA_GENERIC)
-  #error "Config.h: no GPS driver selected (see DRIVER SELECTION)"
+#if defined(SD_CARD) && defined(CONFIG_IDF_TARGET_ESP32C3)
+  #error "Config.h: the C3 has no free pins for a microSD"
+#endif
+
+#if defined(DISPLAY_SPI) && defined(CONFIG_IDF_TARGET_ESP32C3)
+  #error "Config.h: the C3 has no free pins for an SPI display"
 #endif
 
 #endif  // WHEELSTAT_CONFIG_H

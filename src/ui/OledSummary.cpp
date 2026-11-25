@@ -73,8 +73,7 @@ static void drawMaxima2() {
 
   display.setCursor(0, 56);
   display.print(TR_O_SUM_DURATION);
-  display.print(seconds / 60);  display.print('m');
-  display.print(seconds % 60);  display.print('s');
+  display.printf("%lu:%02lu", (unsigned long)(seconds / 60), (unsigned long)(seconds % 60));
 
   display.setCursor(80, 56);
   display.print(records::anyNew() ? TR_O_SUM_NEW : TR_O_SUM_KEY);

@@ -35,6 +35,7 @@ CAPTIONS = {
         "page_7_records2": "7 · Record 2/2",
         "page_8_storage": "8 · Memoria",
         "page_9_wifi": "9 · WiFi",
+        "page_10_qr": "10 · QR del WiFi (a WiFi acceso)",
     },
     "en": {
         "page_0_lean": "0 · Lean",
@@ -47,6 +48,7 @@ CAPTIONS = {
         "page_7_records2": "7 · Records 2/2",
         "page_8_storage": "8 · Storage",
         "page_9_wifi": "9 · WiFi",
+        "page_10_qr": "10 · WiFi QR (with the WiFi on)",
     },
 }
 

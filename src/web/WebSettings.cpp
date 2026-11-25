@@ -63,11 +63,16 @@ void handleSettings() {
   // --- Session log ---
   page.print(F("<h2>" TR_W_SET_LOG "</h2><div class='card'><div class='fields'>"
                "<label class='field'><span>" TR_W_SET_LOG_RATE "</span>"));
-  page.printf("<input type='number' name='rate' value='%u' min='%u' max='%u' step='1' required></label>",
-              (unsigned)current.logRateHz, (unsigned)LOG_RATE_MIN_HZ, (unsigned)LOG_RATE_MAX_HZ);
-  page.print(F("<span class='hint'>" TR_W_SET_LOG_HELP_1));
+  // The hours of recording left follow the number while it is typed: the
+  // trade-off between detail and duration is the point of this setting.
+  page.printf("<input type='number' name='rate' value='%u' min='%u' max='%u' step='1' required "
+              "oninput=\"var r=+this.value;if(r>0)document.getElementById('hours').textContent=(%llu/(3600*r*%u)).toFixed(1)\">"
+              "</label>",
+              (unsigned)current.logRateHz, (unsigned)LOG_RATE_MIN_HZ, (unsigned)LOG_RATE_MAX_HZ,
+              (unsigned long long)storage::freeBytes(), (unsigned)sizeof(core::SessionSample));
+  page.print(F("<span class='hint'>" TR_W_SET_LOG_HELP_1 "<b id='hours'>"));
   page.printf("%.1f", hoursLeftAt(current.logRateHz));
-  page.print(F(TR_W_SET_LOG_HELP_2 "</span></div></div>"));
+  page.print(F("</b>" TR_W_SET_LOG_HELP_2 "</span></div></div>"));
 
   // --- Events and alert ---
   page.print(F("<h2>" TR_W_SET_EVENTS "</h2><div class='card'><div class='fields'>"));

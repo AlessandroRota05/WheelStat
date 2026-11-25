@@ -32,4 +32,6 @@ void update() {
 
 const Reading &reading() { return current; }
 
+uint32_t intervalMs() { return weatherSensor::intervalMs(); }
+
 }  // namespace weather

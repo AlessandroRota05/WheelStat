@@ -5,16 +5,21 @@
 #include "../Gps.h"
 #include "../LapTimer.h"
 #include "../Motion.h"
+#include "../Power.h"
 #include "../Recorder.h"
 #include "../Records.h"
 #include "../Settings.h"
+#include "../Stats.h"
 #include "../Storage.h"
 #include "../Tracks.h"
 #include "../Tuning.h"
+#include "../Util.h"
 #include "../Weather.h"
 #include "../i18n/Text.h"
 #include "../web/Web.h"
 #include "OledDraw.h"
+
+#include <qrcode.h>
 
 namespace oled {
 
@@ -26,29 +31,65 @@ constexpr int PAGE_COUNT = (int)Page::Count;
 // Status bar
 // ===========================================================================
 
-// Title on the left, REC/IDLE on the right and, in between, the GPS flag -
-// only when a finish line is set: it tells from ANY page whether laps are
-// being counted.
+// Icons, one row per byte pair, most significant bit on the left.
+static const uint8_t ICON_FLAG[] PROGMEM = {  // 7x8: chequered flag on a pole
+  0xD4, 0xAA, 0xD4, 0xAA, 0x80, 0x80, 0x80, 0x80
+};
+static const uint8_t ICON_WIFI[] PROGMEM = {  // 9x7: two arcs and a dot
+  0x3E, 0x00, 0x41, 0x00, 0x80, 0x80, 0x1C, 0x00, 0x22, 0x00, 0x00, 0x00, 0x08, 0x00
+};
+
+// GPS: a ring, with a dot in the middle once there is a fix - the same
+// symbol as a map's "you are here". Followed by the satellites in view, or
+// "--" when the module never answered.
+static int drawGpsIcon(int x) {
+  const gps::Fix &position = gps::fix();
+  display.drawCircle(x + 3, 5, 3, COLOR_OFF);
+  if (position.valid) display.fillCircle(x + 3, 5, 1, COLOR_OFF);
+  display.setCursor(x + 9, 2);
+  if (position.modulePresent) display.print(position.satellites);
+  else display.print(F("--"));
+  return display.getCursorX() + 5;
+}
+
+// The right end: while recording, a blinking dot and how long it has been
+// going (m:ss, then h:mm past 100 minutes); otherwise the bike's voltage
+// when it is read, or nothing.
+static void drawRightStatus() {
+  char text[24] = "";  // room for any uint32: keeps -Wformat-truncation quiet
+  bool recording = recorder::isRecording();
+  if (recording) {
+    uint32_t s = recorder::durationSeconds();
+    if (s < 6000) snprintf(text, sizeof(text), "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+    else snprintf(text, sizeof(text), "%luh%02lu", (unsigned long)(s / 3600), (unsigned long)(s / 60 % 60));
+  } else if (power::sensing()) {
+    snprintf(text, sizeof(text), "%.1fV", power::volts());
+  }
+
+  int x = SCREEN_WIDTH - 2 - strlen(text) * FONT_CHAR_WIDTH;
+  display.setCursor(x, 2);
+  display.print(text);
+
+  // It blinks: recording must be visible out of the corner of the eye.
+  if (recording && (millis() / REC_BLINK_MS) % 2 == 0) display.fillCircle(x - 6, 5, 2, COLOR_OFF);
+}
+
+// Inverted bar on every live page: what is working, at a glance, from any
+// page. GPS and satellites, the flag when a finish line is set (laps are
+// being counted), the WiFi when the network is on, and the recording.
 void drawStatusBar() {
   display.fillRect(0, 0, SCREEN_WIDTH, 11, COLOR_ON);
   display.setTextSize(1);
   display.setTextColor(COLOR_OFF);
-  display.setCursor(2, 2);
-  display.print(F("WHEELSTAT"));
 
+  int x = drawGpsIcon(2);
   if (laps::course().finishSet) {
-    display.setCursor(60, 2);
-    display.print(gps::fix().valid ? F("SAT") : F("SAT!"));
+    display.drawBitmap(x, 2, ICON_FLAG, 7, 8, COLOR_OFF);
+    x += 12;
   }
+  if (web::isActive()) display.drawBitmap(x, 2, ICON_WIFI, 9, 7, COLOR_OFF);
 
-  display.setCursor(94, 2);
-  if (recorder::isRecording()) {
-    // The asterisk blinks: recording is visible out of the corner of the eye.
-    bool blink = (millis() / REC_BLINK_MS) % 2 == 0;
-    display.print(blink ? F("* REC") : F("  REC"));
-  } else {
-    display.print(TR_O_STATUS_IDLE);
-  }
+  drawRightStatus();
   display.setTextColor(COLOR_ON);
 }
 
@@ -87,6 +128,25 @@ static void drawLeanSide(float signedLean) {
   else                display.fillTriangle(X + 8, Y - 6, X + 8, Y + 6, X, Y, COLOR_ON);
 }
 
+// The session's maximum on each side, small, at the ends of the bar it
+// belongs to: how far it went, next to how far it is now. Session means
+// since the recording started (or since boot when not recording).
+static void drawLeanMaxima() {
+  const float *best = stats::sessionMax();
+  char right[4];
+  snprintf(right, sizeof(right), "%d", constrain((int)best[CH_LEAN_RIGHT], 0, 99));
+
+  display.setCursor(2, 33);
+  display.print(TR_O_LBL_LEFT);
+  display.setCursor(2, 43);
+  display.print(constrain((int)best[CH_LEAN_LEFT], 0, 99));
+
+  display.setCursor(SCREEN_WIDTH - 2 - 2 * FONT_CHAR_WIDTH, 33);
+  display.print(TR_O_LBL_RIGHT);
+  display.setCursor(SCREEN_WIDTH - 2 - strlen(right) * FONT_CHAR_WIDTH, 43);
+  display.print(right);
+}
+
 static void drawLean() {
   const motion::State &m = motion::state();
   const float lean = m.leanAbs;
@@ -110,6 +170,7 @@ static void drawLean() {
   bigNumber(constrain((int)lean, 0, 99));
   drawLeanSide(m.lean);
   drawLeanBar(m.lean, safeLean);
+  drawLeanMaxima();
 }
 
 static void drawWeather() {
@@ -135,14 +196,21 @@ static void drawGForce() {
   const motion::State &m = motion::state();
   pageTitle(TR_O_G_TITLE);
 
-  // Numbers on the left (lateral as absolute, longitudinal signed)...
-  display.setCursor(6, 34);
-  display.print(F("Lat :"));
-  display.print(fabsf(m.gLat), 1);
+  // Numbers on the left, two decimals in a column: lateral as a size with
+  // its side, longitudinal signed (+ accelerating, - braking)...
+  display.setCursor(4, 32);
+  display.print(F("Lat"));
+  display.setCursor(34, 32);
+  display.print(fabsf(m.gLat), 2);
+  if (fabsf(m.gLat) >= 0.05f) {
+    display.print(' ');
+    display.print(m.gLat > 0 ? TR_O_LBL_RIGHT[0] : TR_O_LBL_LEFT[0]);
+  }
 
-  display.setCursor(6, 48);
-  display.print(F("Long:"));
-  display.print(m.gLong, 1);
+  display.setCursor(4, 46);
+  display.print(F("Lon"));
+  display.setCursor(m.gLong < 0 ? 28 : 34, 46);  // the minus sign sticks out left
+  display.print(m.gLong, 2);
 
   // ...and a radar on the right: circle with crosshair, like car G-meters.
   // The inner ring is 0.5 G, where most road riding stays.
@@ -158,6 +226,18 @@ static void drawGForce() {
   // about 1 G: on the road it rarely leaves the circle.
   int dotX = constrain(CX + (int)(m.gLat * 14), CX - 14, CX + 14);
   int dotY = constrain(CY - (int)(m.gLong * 14), CY - 14, CY + 14);
+
+  // A trail of where the dot was over the last second, one pixel per
+  // frame: a braking-into-the-corner sweep reads as a curve, not a jump.
+  constexpr int TRAIL = 10;
+  static int8_t trailX[TRAIL], trailY[TRAIL];
+  static uint8_t head = 0, filled = 0;
+  for (int i = 0; i < filled; i++) display.drawPixel(CX + trailX[i], CY + trailY[i], COLOR_ON);
+  trailX[head] = dotX - CX;
+  trailY[head] = dotY - CY;
+  head = (head + 1) % TRAIL;
+  if (filled < TRAIL) filled++;
+
   display.fillCircle(dotX, dotY, 3, COLOR_ON);
 }
 
@@ -267,8 +347,7 @@ static void drawLaps() {
   dataRow(38, TR_O_LAP);
   if (laps::lapRunning()) {
     uint32_t seconds = laps::currentLapMs() / 1000;
-    display.print(seconds / 60);  display.print('m');
-    display.print(seconds % 60);  display.print('s');
+    display.printf("%lu:%02lu", (unsigned long)(seconds / 60), (unsigned long)(seconds % 60));
 
     // Which lap this is, right-aligned.
     char number[13];  // room for any int, which keeps -Wformat-truncation quiet
@@ -323,20 +402,35 @@ static void drawRecords2() {
 static void drawStorage() {
   pageTitle(TR_O_STORAGE_TITLE);
 
-  dataRow(30, "Flash");
-  if (storage::ok()) {
-    display.print(storage::freeBytes() / 1024);
-    display.print(TR_O_FREE_KB);
-  } else {
+  if (!storage::ok()) {
+    dataRow(41, "Flash");
     display.print(TR_O_ERROR);
+    return;
   }
 
+  // How full, then what is left in the two units that matter: space, and
+  // hours of recording at the rate set now - the one a rider plans with.
+  const uint64_t total = storage::totalBytes(), used = storage::usedBytes();
+  dataRow(29, storage::onCard() ? "SD" : "Flash");
+  meter(VALUE_X, 29, SCREEN_WIDTH - VALUE_X - 4, total ? (float)used / total : 1.0f);
+
+  char size[16];
+  formatSize(storage::freeBytes(), size, sizeof(size));
+  dataRow(38, TR_O_FREE);
+  display.print(size);
+
+  uint32_t minutes = storage::freeBytes() / (60ULL * settings::logRateHz() * sizeof(core::SessionSample));
+  dataRow(47, TR_O_TIME_LEFT);
+  display.print(minutes / 60);   display.print('h');
+  display.print(minutes % 60);   display.print('m');
+
+  // The recording time is in the status bar already: here, which file.
   if (recorder::isRecording()) {
-    dataRow(41, TR_O_FILE);     display.print(recorder::fileName() + 1);  // skip the "/"
-    dataRow(52, TR_O_MINUTES);  display.print(recorder::minutesLogged());
+    dataRow(56, TR_O_FILE);
+    display.print(recorder::fileName() + 1);  // skip the "/"
   } else {
-    dataRow(41, TR_O_STATUS);   display.print(TR_O_PAUSED);
-    dataRow(52, TR_O_START);    display.print(TR_O_KEY_LOG);
+    dataRow(56, TR_O_START);
+    display.print(TR_O_KEY_LOG);
   }
 }
 
@@ -360,10 +454,113 @@ static void drawWiFi() {
   }
 }
 
+// ===========================================================================
+// WiFi QR code
+// ===========================================================================
+// The standard "WIFI:" payload that phone cameras understand: pointing the
+// camera at the panel joins the network, no password to type. The website
+// then opens by itself (the access point answers as a captive portal, see
+// src/web/Web.cpp).
+//
+// The encoder is the one shipped with the ESP32 core (esp_qrcode). It hands
+// the finished symbol to a callback with no user pointer, hence the static
+// copy below - which is also a cache: encoding runs only when name or
+// password change, not at every frame.
+
+constexpr int QR_MAX_SIZE = 33;  // version 4: the largest that fits 64 px
+
+static char    qrPayload[64] = "";
+static uint8_t qrSize = 0;       // modules per side, 0 = not encoded
+static uint8_t qrBits[(QR_MAX_SIZE * QR_MAX_SIZE + 7) / 8];
+
+static void storeQr(esp_qrcode_handle_t code) {
+  int size = esp_qrcode_get_size(code);
+  if (size > QR_MAX_SIZE) return;
+  memset(qrBits, 0, sizeof(qrBits));
+  for (int y = 0; y < size; y++)
+    for (int x = 0; x < size; x++)
+      if (esp_qrcode_get_module(code, x, y)) {
+        int bit = y * size + x;
+        qrBits[bit / 8] |= 1 << (bit % 8);
+      }
+  qrSize = size;
+}
+
+// In the WIFI: format the characters \ ; , " : must be escaped.
+static void appendEscaped(char *out, size_t size, const char *text) {
+  size_t n = strlen(out);
+  for (const char *c = text; *c && n + 2 < size; c++) {
+    if (strchr("\\;,\":", *c)) out[n++] = '\\';
+    out[n++] = *c;
+  }
+  out[n] = '\0';
+}
+
+static void updateQr() {
+  char payload[sizeof(qrPayload)] = "WIFI:T:WPA;S:";
+  appendEscaped(payload, sizeof(payload), settings::wifiName());
+  strlcat(payload, ";P:", sizeof(payload));
+  appendEscaped(payload, sizeof(payload), settings::wifiPassword());
+  strlcat(payload, ";;", sizeof(payload));
+  if (strcmp(payload, qrPayload) == 0) return;
+
+  strlcpy(qrPayload, payload, sizeof(qrPayload));
+  qrSize = 0;
+  esp_qrcode_config_t config = {};  // the header's default macro is C-only syntax
+  config.display_func       = storeQr;
+  config.max_qrcode_version = 4;
+  config.qrcode_ecc_level   = ESP_QRCODE_ECC_LOW;
+  esp_qrcode_generate(&config, qrPayload);
+}
+
+// Full screen, no status bar: the code needs every row. Dark modules on a
+// lit square, as scanners expect, with a lit margin around it.
+static void drawWiFiQr() {
+  updateQr();
+  if (qrSize == 0) {  // a name or password too long to encode: say so
+    printCentered(TR_O_WIFI_TITLE, 28);
+    printCentered("QR ?", 40);
+    return;
+  }
+
+  const int scale = SCREEN_HEIGHT / (qrSize + 2);  // 2 px per module up to version 3
+  const int side  = qrSize * scale;
+  const int frame = SCREEN_HEIGHT;                 // the lit square
+  const int ox    = (frame - side) / 2;
+
+  display.fillRect(0, 0, frame, frame, COLOR_ON);
+  for (int y = 0; y < qrSize; y++)
+    for (int x = 0; x < qrSize; x++) {
+      int bit = y * qrSize + x;
+      if (qrBits[bit / 8] & (1 << (bit % 8)))
+        display.fillRect(ox + x * scale, ox + y * scale, scale, scale, COLOR_OFF);
+    }
+
+  const int TEXT_X = frame + 4;
+  display.setCursor(TEXT_X, 6);   display.print(TR_O_WIFI_TITLE);
+  display.drawFastHLine(TEXT_X, 16, SCREEN_WIDTH - TEXT_X - 2, COLOR_ON);
+  display.setCursor(TEXT_X, 22);  display.print(TR_O_QR_1);
+  display.setCursor(TEXT_X, 32);  display.print(TR_O_QR_2);
+  display.setCursor(TEXT_X, 42);  display.print(TR_O_QR_3);
+
+  // The network name, cut to what fits beside the code.
+  char name[(SCREEN_WIDTH - TEXT_X) / FONT_CHAR_WIDTH + 1];
+  strlcpy(name, settings::wifiName(), sizeof(name));
+  display.setCursor(TEXT_X, 56);
+  display.print(name);
+}
+
 void composePage() {
   display.clearDisplay();
-  drawStatusBar();
 
+  // The QR page belongs to the WiFi: once that is off, it is gone.
+  if (page == Page::WiFiQr && !web::isActive()) page = Page::WiFi;
+  if (page == Page::WiFiQr) {
+    drawWiFiQr();
+    return;
+  }
+
+  drawStatusBar();
   switch (page) {
     case Page::Lean:     drawLean();     break;
     case Page::Weather:  drawWeather();  break;
@@ -375,9 +572,11 @@ void composePage() {
     case Page::Records2: drawRecords2(); break;
     case Page::Storage:  drawStorage();  break;
     case Page::WiFi:     drawWiFi();     break;
+    case Page::WiFiQr:
     case Page::Count:    break;
   }
-  pageMarker((int)page, PAGE_COUNT);
+  // The QR page has no title to mark: the marker counts the other ten.
+  pageMarker((int)page, PAGE_COUNT - 1);
 }
 
 Page currentPage() { return page; }
@@ -414,7 +613,7 @@ static uint8_t incomingFrame[BUFFER_BYTES];
 constexpr int      TRANSITION_STEP_PX = 16;
 constexpr uint32_t TRANSITION_PAUSE_MS = 5;
 
-static void slideTo(int direction) {
+static void slideTo(int direction, bool barStays) {
   // The page being left is already on screen.
   memcpy(outgoingFrame, display.getBuffer(), BUFFER_BYTES);
 
@@ -441,7 +640,9 @@ static void slideTo(int direction) {
       }
     }
 
-    drawStatusBar();  // still, on top of the composed frame
+    // Still, on top of the composed frame - unless one of the two pages
+    // has no bar (the QR code), and then it slides along with its page.
+    if (barStays) drawStatusBar();
     display.display();
     delay(TRANSITION_PAUSE_MS);
   }
@@ -453,9 +654,15 @@ static void slideTo(int direction) {
 }
 
 void changePage(int direction) {
+  const Page from = page;
   // "+ PAGE_COUNT" keeps the modulo from going negative.
-  page = (Page)(((int)page + PAGE_COUNT + (direction > 0 ? 1 : -1)) % PAGE_COUNT);
-  if (available()) slideTo(direction);
+  auto step = [&]() {
+    page = (Page)(((int)page + PAGE_COUNT + (direction > 0 ? 1 : -1)) % PAGE_COUNT);
+  };
+  step();
+  if (page == Page::WiFiQr && !web::isActive()) step();  // only there with the WiFi on
+
+  if (available()) slideTo(direction, from != Page::WiFiQr && page != Page::WiFiQr);
 }
 
 // ===========================================================================

@@ -8,6 +8,7 @@
 #include "Gps.h"
 #include "LapTimer.h"
 #include "Motion.h"
+#include "Power.h"
 #include "Recorder.h"
 #include "Settings.h"
 #include "Stats.h"
@@ -42,7 +43,7 @@ struct BootStep {
   const char *failureHint;
 };
 
-static const char *storageName() { return "LittleFS"; }
+static const char *storageName() { return storage::name(); }
 
 // The GPS tick means "the module sends NMEA", NOT "fix acquired": the fix
 // comes tens of seconds later and has its own page.
@@ -81,13 +82,14 @@ static void runBootSteps() {
       oled::checklistPending(row, step.label, step.driverName());
       ok = step.init();
     }
-    oled::checklistResult(row, ok);
+    oled::checklistResult(row, ok, step.driverName());
 
     Serial.println(ok ? "OK." : step.failureHint);
   }
 
   if (storage::ok())
-    Serial.printf("Storage: %u KB free.\n", (unsigned)(storage::freeBytes() / 1024));
+    Serial.printf("Storage: %s, %llu KB free.\n", storage::name(),
+                  (unsigned long long)(storage::freeBytes() / 1024));
 }
 
 // Blocks until the magnetometer is ready; OK skips it. Which quantity
@@ -136,6 +138,7 @@ void setup() {
   Serial.println(FIRMWARE_VERSION);
 
   buttons::begin();
+  power::begin();
 
   // I2C bus shared by OLED, IMU and (if I2C) the weather sensor.
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
@@ -189,6 +192,7 @@ static void handleOk() {
       setFinishLine();
       break;
     case oled::Page::WiFi:
+    case oled::Page::WiFiQr:
       if (web::isActive()) web::stop();
       else web::start();
       break;
@@ -222,6 +226,18 @@ static void handleButtons() {
   // Re-armed AFTER the action: holding the key during a page transition
   // must not queue presses on top of the animation.
   buttons::holdOff();
+}
+
+// The key has just been turned off and the capacitor is all that keeps the
+// board running: close the recording at once, with no summary screen - the
+// summary waits for a key, and there is no time to wait. The records are
+// updated by stop() all the same and shown on the Records pages next time.
+static void onKeyOff() {
+  Serial.println(F("Power: key off."));
+  if (!recorder::isRecording()) return;
+  recorder::stop();
+  Serial.println(F("Power: recording closed before the power went."));
+  oled::notice(TR_O_POWER_SAVED);
 }
 
 // ===========================================================================
@@ -261,6 +277,8 @@ static void printTelemetry() {
     Serial.printf("%s=%u ", eventInfo(e).csvName, (unsigned)stats::eventCount(e));
   Serial.println();
 
+  if (power::sensing()) Serial.printf("Power    : %.1f V\n", power::volts());
+
   if (motion::available()) motion::printCalibration(Serial);
   else Serial.println(F("Calibr.  : IMU MISSING"));
   Serial.println(F("------------------------"));
@@ -277,10 +295,13 @@ void loop() {
   static uint32_t lastDisplay = 0;
   static uint32_t lastSerial  = 0;
 
-  if (elapsed(lastWeather, WEATHER_INTERVAL_MS)) weather::update();
+  if (elapsed(lastWeather, weather::intervalMs())) weather::update();
 
   // IMU and GPS every pass: not to miss peaks, and because NMEA bytes
   // arrive as a stream that must be drained at once.
+  // First of all: when the key goes off every millisecond counts.
+  if (power::keyTurnedOff()) onKeyOff();
+
   if (motion::update()) stats::sample();
   gps::update();
   tracks::onLapEvent(laps::update());  // uses the position just read

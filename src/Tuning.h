@@ -45,11 +45,6 @@ constexpr uint32_t SPLASH_HOLD_MS      = 1500;   // time to read the boot checkl
 constexpr uint32_t LOOP_PAUSE_MS       = 10;     // breathing room for the watchdog
 constexpr uint32_t SUMMARY_TIMEOUT_MS  = 30000;  // auto-exit from blocking screens
 
-// How long the GPS UART is listened to at boot before the module is declared
-// missing. Sized for the slowest case: a non-u-blox module stays at 1 Hz, so
-// 1500 ms guarantee a whole sentence with margin.
-constexpr uint32_t GPS_BOOT_LISTEN_MS = 1500;
-
 // --- Session log --------------------------------------------------------------
 // Samples per second written to flash. 24 bytes each: 3 Hz is ~260 KB per
 // hour, about five hours on the 1.4 MB data partition.

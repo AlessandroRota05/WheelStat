@@ -1,21 +1,31 @@
 # Compatibilità hardware
 
-Quali componenti si possono sostituire, con cosa, e cosa serve fare. Tutto quello che è elencato qui si cambia **da `Config.h`**, senza toccare la logica del firmware. Come funziona il meccanismo è in [DRIVER.md](DRIVER.md).
+Quali componenti funzionano, come li riconosce il firmware e cosa va controllato al primo montaggio. Come sono fatti i driver è in [DRIVER.md](DRIVER.md).
 
-> **Stato delle verifiche.** Solo la configurazione montata è provata su hardware reale. I driver alternativi sono scritti e **verificati in compilazione**, non sul campo: quando ne monti uno per la prima volta, aspettati di dover aggiustare l'indirizzo I2C e di dover controllare i versi/le unità. Le righe segnate 🔧 sono quelle mai provate fisicamente.
+*English version: [en/HARDWARE.md](en/HARDWARE.md).*
+
+> **Stato delle verifiche.** Solo la configurazione montata è provata su hardware reale. Gli altri componenti sono scritti seguendo i loro datasheet, i calcoli (conversioni, checksum, filtro d'assetto) sono verificati sul PC e tutto è **verificato in compilazione**, ma non sul campo. Le righe segnate 🔧 sono quelle mai provate fisicamente: al primo montaggio segui [COLLAUDO.md](COLLAUDO.md).
 
 ---
 
 ## Configurazione montata
 
-| Categoria | Componente | Bus | Indirizzo / Pin | Macro in `Config.h` |
-|---|---|---|---|---|
-| MCU | ESP32 DevKit V1 | - | - | - (automatica, vedi sotto) |
-| IMU | Bosch BNO055 | I2C | `0x28` | - (non intercambiabile, vedi sotto) |
-| Display | OLED SSD1306 128×64 | I2C | `0x3C` | `DISPLAY_SSD1306` |
-| Meteo | DHT22 / AM2302 | one-wire | GPIO 4 | `WEATHER_DHT22` |
-| GPS | u-blox NEO-6M / NEO-8M | UART2 | GPIO 16/17 | `GPS_UBLOX` |
-| Pulsanti | 4× tattili | GPIO | 13 / 25 / 14 / 27 | - (solo pin) |
+| Categoria | Componente | Bus | Indirizzo / Pin |
+|---|---|---|---|
+| MCU | ESP32 DevKit V1 | - | - |
+| IMU | Bosch BNO055 | I2C | `0x28` |
+| Display | OLED SSD1306 128×64 | I2C | `0x3C` |
+| Meteo | DHT22 / AM2302 | one-wire | GPIO 4 |
+| GPS | u-blox NEO-6M / NEO-8M | UART2 | GPIO 16/17 |
+| Pulsanti | 4× tattili | GPIO | 13 / 25 / 14 / 27 |
+
+![Schema dei collegamenti](../Media/hardware/wiring_it.svg)
+
+## Riconosciuti da soli
+
+**Non si sceglie niente in `Config.h`** per il sensore meteo, l'IMU, il GPS, l'indirizzo del display e la microSD: all'accensione il firmware li cerca e usa quello che risponde. La schermata d'avvio mostra il nome di ciò che ha trovato, il monitor seriale qualche dettaglio in più (per il GPS la velocità della seriale e i report al secondo ottenuti).
+
+In `Config.h` restano solo le cose che non si possono chiedere al componente: il controller del display, se il display è su SPI, quali IMU con libreria includere, e la posizione dell'IMU nella scatola.
 
 ---
 
@@ -23,18 +33,16 @@ Quali componenti si possono sostituire, con cosa, e cosa serve fare. Tutto quell
 
 Il firmware gira su tutta la famiglia. Cambiano i **numeri GPIO**: sull'S3 e sul C3 i pin 22, 25 e 27 del DevKit V1 non esistono affatto, e il C3 ha due UART invece di tre. `Config.h` ha quindi quattro piedinature, scelte dal preprocessore con le macro `CONFIG_IDF_TARGET_*` del core: basta selezionare la board nell'IDE.
 
-| Chip | Stato | SU/GIÙ/OK/LOG | DHT | SDA/SCL | GPS RX/TX | UART GPS | Flash (v11.0) |
+| Chip | Stato | SU/GIÙ/OK/LOG | DHT | SDA/SCL | GPS RX/TX | SPI SCK/MISO/MOSI, CS microSD | Flash |
 |---|---|---|---|---|---|---|---|
-| **ESP32** (DevKit V1, WROOM, WROVER) | montato | 13 / 25 / 14 / 27 | 4 | 21 / 22 | 16 / 17 | 2 | 1136788 B (86 %) |
-| **ESP32-S3** | 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 2 | 1111629 B (84 %) |
-| **ESP32-S2** | 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 1 | 1076660 B (82 %) |
-| **ESP32-C3** | 🔧 | 3 / 4 / 5 / 6 | 10 | 8 / 9 | 0 / 1 | 1 | 1210931 B (**92 %**) |
+| **ESP32** (DevKit V1, WROOM, WROVER) | montato | 13 / 25 / 14 / 27 | 4 | 21 / 22 | 16 / 17 | 18 / 19 / 23, 5 | 1224886 B (93 %) |
+| **ESP32-S3** | 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 12 / 13 / 11, 10 | ~87 % (v11.1) |
+| **ESP32-S2** | 🔧 | 5 / 6 / 7 / 15 | 4 | 8 / 9 | 18 / 17 | 12 / 13 / 11, 10 | ~84 % (v11.1) |
+| **ESP32-C3** | 🔧 | 3 / 4 / 5 / 6 | 10 | 8 / 9 | 0 / 1 | - (niente microSD) | 1267021 B (**96 %**) |
 
 Le piedinature 🔧 compilano e rispettano i vincoli del chip, ma **nessuna è mai stata cablata**: prima di saldare, confrontale con la serigrafia della tua board.
 
-S3, S2 e C3 sono stati misurati prima delle ultime modifiche a display e sito, che aggiungono circa 6 KB.
-
-**Il C3 sta al 92% della flash** contro l'82-86% degli altri: è il core RISC-V, ~80 KB in più a parità di sorgente. Ci sta col partizionamento di default su 4 MB, ma restano circa 100 KB per nuove funzioni. Se serve spazio, si cambia schema di partizionamento.
+**Il C3 è al 96% della flash**: è il core RISC-V, ~80 KB in più a parità di sorgente, e restano circa 45 KB. Sulle altre schede la microSD costa ~43 KB (sull'ESP32 classico: 90% senza, 93% con). S3 e S2 sono le misure della v11.1: con questa versione salgono di qualche punto.
 
 **Vincoli da rispettare se cambi i pin:**
 
@@ -53,93 +61,126 @@ Per una board non prevista si copia il blocco più vicino in `Config.h`.
 
 ## Mappa del bus I2C: controllare prima di comprare
 
-OLED, IMU ed eventuale sensore meteo I2C condividono **lo stesso bus** (SDA 21 / SCL 22 sull'ESP32 classico, 8 / 9 sulle altre varianti). Due componenti sullo stesso indirizzo non funzionano, e il sintomo è ambiguo: di solito ne sparisce uno solo, apparentemente a caso.
+Display, IMU e sensore meteo I2C condividono **lo stesso bus** (SDA 21 / SCL 22 sull'ESP32 classico, 8 / 9 sulle altre varianti). Il firmware trova da solo l'indirizzo di ognuno, ma **due componenti sullo stesso indirizzo non funzionano**: di solito ne sparisce uno, apparentemente a caso.
 
-| Indirizzo | Occupato da | Note |
-|---|---|---|
-| `0x28` | BNO055 | `0x29` su alcuni breakout (ponticello ADR) |
-| `0x3C` | SSD1306 / SH1106 / SH1107 / SSD1327 | `0x3D` su alcuni moduli |
-| `0x38` | *libero* | AHT20 |
-| `0x40` / `0x41` | *libero* | HTU21D, HTU31D, Si7021 |
-| `0x44` / `0x45` | *libero* | SHT31, SHT4x |
-| `0x4A` / `0x4B` | *libero* | BNO085 / BNO086, **non** collide col BNO055 |
-| `0x76` / `0x77` | *libero* | BME280 / BMP280 |
+| Indirizzo | Componenti |
+|---|---|
+| `0x28` / `0x29` | BNO055 |
+| `0x38` | AHT10 / AHT20 / AHT21 / AHT25 |
+| `0x3C` / `0x3D` | display OLED |
+| `0x40` | HDC1080, Si7021, HTU21D, SHT21, HTU31D (uno solo per volta) |
+| `0x41` | HTU31D con ADDR alto |
+| `0x44` / `0x45` | SHT4x (solo `0x44`), SHT3x |
+| `0x4A` / `0x4B` | BNO085 / BNO086 |
+| `0x5C` | AM2320 |
+| `0x68` / `0x69` | MPU6050 e famiglia, ICM-20948 |
+| `0x6A` / `0x6B` | LSM6DS3 / DSL / DSO / DSOX, ISM330DHCX |
+| `0x70` | SHTC3 |
+| `0x76` / `0x77` | BME280 |
 
-Nessuna delle alternative elencate in questo documento collide con l'esistente. **Va comunque verificato scheda per scheda**: i breakout economici non sempre rispettano il datasheet, e capita che un modulo venduto come `0x76` arrivi cablato a `0x77`. Uno sketch I2C scanner da 20 righe risolve il dubbio in un minuto.
+Dove due chip condividono un indirizzo (`0x40`, `0x44`, `0x68`) il firmware li distingue da un registro d'identità o dal CRC della loro risposta, e li prova in un ordine preciso: [DRIVER.md](DRIVER.md#il-riconoscimento). Nessuna combinazione di un display, un'IMU e un sensore meteo di questa tabella si scontra.
 
 ---
 
 ## Sensore meteo
 
-**Otto driver, tutti scritti.** Si passa dall'uno all'altro con una riga in `Config.h` più l'installazione della libreria.
+Tutti letti **senza libreria**, tranne il DHT: il firmware parla direttamente col chip, con le formule di conversione del datasheet (verificate sul PC in `src/core/SensorMath`). Uno vale l'altro: il primo che risponde viene usato.
 
-| Componente | Stato | Bus | Indirizzo | Macro | Libreria | Cosa cambia |
-|---|---|---|---|---|---|---|
-| **DHT22 / AM2302** | montato | one-wire | GPIO 4 | `WEATHER_DHT22` | DHT sensor library | - |
-| **Sensirion SHT4x** (SHT40/41/45) | 🔧 **consigliato** | I2C | `0x44` fisso | `WEATHER_SHT4X` | Adafruit SHT4x | La generazione attuale Sensirion: ±1.8 %RH, ±0.2 °C. **Se compri oggi, è questo.** Riscaldatore tenuto spento dal driver: scalderebbe il sensore falsando proprio la temperatura da cui dipende il rischio grip |
-| **Sensirion SHT31-D** | 🔧 pronto | I2C | `0x44` | `WEATHER_SHT31` | Adafruit SHT31 | Generazione precedente: ±2 %RH, ±0.3 °C |
-| **HTU31D** | 🔧 pronto | I2C | `0x40` | `WEATHER_HTU31D` | Adafruit HTU31D | Paragonabile allo SHT31 a costo minore |
-| **Si7021** | 🔧 pronto | I2C | `0x40` fisso | `WEATHER_SI7021` | Adafruit Si7021 | Classico affidabile, gruppo di testa nei confronti indipendenti |
-| **HTU21D-F** | 🔧 pronto | I2C | `0x40` fisso | `WEATHER_HTU21D` | Adafruit HTU21DF | Predecessore dell'HTU31D. Utile come ricambio |
-| **AHT20** | 🔧 pronto | I2C | `0x38` fisso | `WEATHER_AHT20` | Adafruit AHTX0 | Il più economico. Nei confronti indipendenti lo scarto dal riferimento **varia con la temperatura** e tende a leggere alto: accettabile per un indice indicativo come il rischio grip, non per misure fini |
-| **Bosch BME280** | 🔧 pronto | I2C | `0x76` | `WEATHER_BME280` | Adafruit BME280 | Ha anche la pressione, che il firmware ignora: rappresentarla richiederebbe una voce in `Channel` (la tabella dei canali in `src/Channels.h`), non un driver. Il suo `weatherSensor::begin()` legge il chip-ID e **spiega sul monitor seriale** se hai ricevuto un BMP280 |
+| Componente | Stato | Bus | Indirizzo | Note |
+|---|---|---|---|---|
+| **DHT22 / AM2302** | montato | one-wire | GPIO 4 | Letto ogni 2 s: più spesso ripete l'ultimo valore |
+| **DHT11** | 🔧 | one-wire | GPIO 4 | Riconosciuto dal formato della risposta. Precisione scarsa (±2 °C, ±5 %), interi |
+| **Sensirion SHT4x** (SHT40/41/45) | 🔧 **consigliato** | I2C | `0x44` | La generazione attuale: ±1,8 %RH, ±0,2 °C. **Se compri oggi, è questo.** Riscaldatore tenuto spento: scalderebbe il sensore falsando la temperatura da cui dipende il rischio grip |
+| **Sensirion SHT3x** (SHT30/31/35) | 🔧 | I2C | `0x44` / `0x45` | Generazione precedente: ±2 %RH, ±0,3 °C |
+| **Sensirion SHTC3** | 🔧 | I2C | `0x70` | Piccolo ed economico, ±2 %RH, ±0,2 °C |
+| **TI HDC1080** | 🔧 | I2C | `0x40` | ±2 %RH, ±0,2 °C |
+| **Si7021 / HTU21D / SHT21** | 🔧 | I2C | `0x40` | Classici, compatibili tra loro |
+| **TE HTU31D** | 🔧 | I2C | `0x40` / `0x41` | Paragonabile allo SHT3x a costo minore |
+| **AHT10 / AHT20 / AHT21 / AHT25** | 🔧 | I2C | `0x38` | I più economici: lo scarto dal riferimento **varia con la temperatura** e tende a leggere alto. Va bene per un indice indicativo come il rischio grip |
+| **Aosong AM2320** | 🔧 | I2C | `0x5C` | La versione I2C del DHT22 |
+| **Bosch BME280** | 🔧 | I2C | `0x76` / `0x77` | Misura anche la pressione, che il firmware ignora |
 
-Tre di questi (SHT4x, HTU31D, AHT20) usano l'API *unified sensor* di Adafruit: una chiamata che riempie due strutture evento invece di due funzioni che ritornano `float`. Per il contratto non cambia niente, ma attenzione all'ordine dei parametri di `getEvent()`: **prima l'umidità**.
+> ⚠️ **Trappola BME280 / BMP280.** Sono identici d'aspetto e hanno **lo stesso indirizzo**, ma il BMP280 non ha il sensore di umidità. È una delle sostituzioni sbagliate più comuni nei moduli venduti online. Per questo progetto non è un dettaglio: **l'umidità è metà della formula del rischio grip**. Il firmware riconosce il BMP280 dal suo chip-ID e lo spiega sul monitor seriale invece di ignorarlo in silenzio.
 
-Si7021, HTU21D e HTU31D stanno tutti su `0x40`: non collidono con niente di montato, ma non possono convivere fra loro. Non è un problema: se ne monta uno solo.
+**Requisito della categoria:** temperatura *e* umidità. Un sensore di sola temperatura non è un'alternativa parziale: senza umidità il rischio grip non si calcola.
 
-> ⚠️ **Trappola BME280 / BMP280.** Sono due sensori diversi con lo stesso identico aspetto e **lo stesso indirizzo I2C** (`0x76`/`0x77`): il BMP280 misura solo temperatura e pressione, **niente umidità**. È una delle sostituzioni sbagliate più comuni fra i moduli venduti online, dove capita di ordinare un BME280 e ricevere un BMP280. Per questo progetto non è un dettaglio: **l'umidità è metà della formula del rischio grip** (`core::gripRisk` in `src/core/GripRisk.h`), quindi un BMP280 non degrada la funzione, la disattiva. Si distinguono solo leggendo il registro chip-ID `0xD0`, non dall'indirizzo.
+---
 
-Il contratto da implementare (`weatherSensor::begin` / `read` / `name`) è documentato in `src/drivers/WeatherSensor.h`. Un ramo nuovo sono ~10 righe: il modello è il ramo `WEATHER_SHT31` in `src/drivers/WeatherSensor.cpp`.
+## IMU
 
-**Requisito non negoziabile della categoria:** il sensore deve dare **temperatura *e* umidità**. Un sensore di sola temperatura non è un'alternativa parziale, è incompatibile: senza umidità il rischio grip non si calcola.
+| Componente | Stato | Indirizzo | Libreria | Note |
+|---|---|---|---|---|
+| **Bosch BNO055** | montato | `0x28` / `0x29` | Adafruit BNO055 | Fusione nel chip. Fuori produzione: vedi sotto |
+| **BNO085 / BNO086** | 🔧 **consigliato** | `0x4A` / `0x4B` | Adafruit BNO08x | Il successore del BNO055. Da attivare in `Config.h` (`IMU_WITH_BNO08X`): la sua libreria occupa ~10 KB di flash |
+| **ISM330DHCX** | 🔧 | `0x6A` / `0x6B` | nessuna | Versione industriale dell'LSM6DSO: la più robusta alle vibrazioni |
+| **LSM6DS3 / DSL / DSO / DSOX** | 🔧 | `0x6A` / `0x6B` | nessuna | Comuni sulle schede Adafruit e SparkFun |
+| **ICM-20948** | 🔧 | `0x68` / `0x69` | nessuna | Il successore dell'MPU9250; il magnetometro non è usato |
+| **MPU6050 / MPU6500 / MPU9250** | 🔧 | `0x68` / `0x69` | nessuna | Il più diffuso (GY-521). Economico ma rumoroso: va fissato rigido |
+| **ICM-20602 / ICM-20689** | 🔧 | `0x68` / `0x69` | nessuna | Stessi registri dell'MPU6500 |
 
-**Attenzione a `WEATHER_INTERVAL_MS`**: sta in `Config.h`, in un blocco per driver. Non è una preferenza, è il limite fisico del sensore: il DHT22 campiona internamente ogni 2 s e interrogarlo più spesso restituisce la lettura precedente, non una nuova.
+### Due modi di avere l'assetto
+
+- **Il BNO055** fa tutto nel chip e consegna angoli già pronti: è il percorso con cui il firmware è nato ed è stato provato, e resta così.
+- **Tutte le altre** consegnano accelerometro e giroscopio grezzi, e l'assetto lo calcola il firmware con un filtro di Madgwick (`src/core/Ahrs`). **Anche il BNO085**, che saprebbe farlo da sé: la sua fusione non conosce la velocità della moto, e senza velocità in curva la piega non si vede (sotto).
+
+**Perché serve la velocità.** In una curva costante la moto si piega in modo che gravità e forza centrifuga, sommate, cadano lungo il suo piano: l'accelerometro "vede" la gravità dritta verso il basso della moto, e un filtro che si fida di lui legge una piega vicina a zero. Lo stesso succede al beccheggio in frenata. Il filtro del firmware toglie dall'accelerometro ciò che il moto ci mette, calcolato dalla velocità del GPS e dal giroscopio (avanti: la variazione di velocità; di lato: velocità per velocità di imbardata), e quello che resta è la gravità. I test sul PC simulano una curva a 20° e a 40° e una frenata: con la correzione la piega torna entro un grado, senza a 20° si perde. Senza fix GPS la correzione semplicemente non c'è.
+
+All'avvio le IMU senza fusione misurano per un secondo lo **zero del giroscopio** (lo scarto che ha anche da ferma): la scatola deve stare ferma durante la schermata d'avvio.
+
+### La posizione nella scatola
+
+Per il BNO055 la decide `IMU_BNO055_REMAP`, per tutte le altre `IMU_AXES` in `Config.h`: quale asse del chip punta in avanti, a sinistra e in alto. Le posizioni `IMU_MOUNT_UPRIGHT` e `IMU_MOUNT_UPSIDE_DOWN` le impostano entrambe, supponendo l'asse X del chip (stampato su quasi tutti i breakout) verso la parte anteriore. Le quattro prove del README dicono se è giusto.
 
 ---
 
 ## Display OLED
 
-| Componente | Stato | Risoluzione | Indirizzo | Macro | Cosa cambia |
-|---|---|---|---|---|---|
-| **SSD1306 128×64** | montato | 128×64 | `0x3C` | `DISPLAY_SSD1306` | - |
-| **SH1106 128×64** | 🔧 pronto | 128×64 | `0x3C` | `DISPLAY_SH1106` | **Niente**: stessa risoluzione, layout identico al pixel |
-| **SH1107 128×64** | 🔧 pronto | 128×64 | `0x3C` | `DISPLAY_SH1107` | Stessa libreria dell'SH1106 (`Adafruit_SH110X` espone due classi). ⚠️ La maggior parte dei moduli SH1107 è **128×128**: vedi riga sotto |
-| **SSD1309 128×64** | 🔧 pronto | 128×64 | `0x3C` | `DISPLAY_SSD1309` | Controller diverso ma compatibile nei comandi: usa **lo stesso driver dell'SSD1306**, la macro separata serve solo a poter scrivere in `Config.h` che pannello c'è davvero |
-| **SSD1306 128×32**, **SH1107 128×128**, **SSD1327 128×128** | ❌ non supportati | ≠128×64 | `0x3C` | - | Il layout è parametrico **solo in orizzontale**: le y (titolo 15, riga 24, dati 30/41/52, piede 56) sono una griglia disegnata a mano, non frazioni di 64 da riscalare. Su 32 px **non è un problema di aritmetica ma di quali dati sacrificare**: tre righe dati non ci stanno, ed è una riprogettazione da fare col pannello davanti; su 128 px il contenuto starebbe schiacciato nella metà superiore con mezzo schermo nero |
+L'**indirizzo** (`0x3C` o `0x3D`) lo trova il firmware. Il **controller** no: pannelli diversi rispondono allo stesso indirizzo, quindi si sceglie in `Config.h`.
 
-**Regola pratica della categoria:** qualunque pannello **monocromatico 128×64 con una libreria basata su Adafruit_GFX** entra con poche righe di driver e zero modifiche al layout. Tutto il resto è un altro lavoro.
+| Componente | Stato | Macro | Note |
+|---|---|---|---|
+| **SSD1306 128×64** | montato | `DISPLAY_SSD1306` | I classici da 0,96" |
+| **SH1106 128×64** | 🔧 | `DISPLAY_SH1106` | Di solito i moduli da 1,3". Layout identico al pixel |
+| **SSD1309 128×64** | 🔧 | `DISPLAY_SSD1309` | Pannelli più grandi (2,42"); stesso driver dell'SSD1306 |
+| **SH1107 128×64** | 🔧 | `DISPLAY_SH1107` | ⚠️ La maggior parte dei moduli SH1107 è 128×128: non supportati |
+| **SSD1306 128×32**, **128×128** | ❌ | - | Il layout è disegnato a mano per 128×64: su 32 righe tre righe di dati non ci stanno |
 
-Esiste anche **U8g2**, che da sola copre una cinquantina di controller diversi, ma ha una sua API, quindi adottarla vorrebbe dire riscrivere tutte le chiamate di disegno di `src/ui/`. Non ne vale la pena finché i pannelli che interessano sono coperti da Adafruit_GFX.
+**Su SPI** (`DISPLAY_SPI` in `Config.h`): SSD1306 e SH1106 esistono anche in versione SPI, a sette pin. È più veloce, ma su SPI non c'è modo di chiedere se il pannello c'è, quindi viene dato per presente. I pin CS, DC e RST sono in `Config.h`; il bus è lo stesso della microSD. Non sul C3, che non ha pin liberi.
 
-> **Se compri un OLED "SSD1306" e l'immagine appare spostata di due pixel in orizzontale, o con una colonna di rumore sul bordo, non è rotto: è un SH1106.** È un caso frequentissimo: quel controller viene rivenduto sotto il nome più noto. Si risolve accendendo `DISPLAY_SH1106` in `Config.h`.
-
-Il disegno vero e proprio (le 10 pagine, il riepilogo di fine sessione) non fa parte del contratto e non cambia mai: sono primitive **Adafruit_GFX**, comuni a tutti i pannelli monocromatici. L'unica cosa specifica del chip è la sequenza di accensione, ed è il motivo per cui i file driver sono corti.
+> **Se compri un OLED "SSD1306" e l'immagine appare spostata di due pixel, o con una colonna di rumore sul bordo, non è rotto: è un SH1106.** Succede spesso: quel controller viene rivenduto sotto il nome più noto. Si risolve con `DISPLAY_SH1106`.
 
 ---
 
 ## GPS
 
-| Componente | Stato | Macro | Cosa cambia |
+Il firmware trova da solo la velocità della seriale (9600, 38400, 115200, 57600), la famiglia del modulo e la configura per la frequenza più alta che regge. Poi **misura** quanti report al secondo arrivano davvero e regola su quello il tempo dopo cui il fix è considerato perso.
+
+| Componente | Stato | Famiglia | Frequenza |
 |---|---|---|---|
-| **u-blox NEO-6M / NEO-8M** | montato | `GPS_UBLOX` | - |
-| **Beitian BN-220 / BN-880** | 🔧 **consigliato** | `GPS_UBLOX` | Sono moduli **u-blox M8**: i comandi UBX del driver attuale valgono così come sono. Il vantaggio vero è l'**antenna ceramica integrata**, molto meglio del NEO-6M nudo per un uso in moto. Il BN-880 aggiunge una bussola che il firmware non usa |
-| **u-blox NEO-M9N** | 🔧 compatibile | `GPS_UBLOX` | Accetta sia i comandi legacy sia quelli nuovi |
-| **u-blox M10** (MAX-M10S, MIA-M10, Beitian serie M10) | 🔧 pronto | `GPS_UBLOX_M10` | Aggancia il fix in 15-20 s invece di 45-60 s e vede più costellazioni. **Serve il driver dedicato**, non `GPS_UBLOX`: vedi sotto |
-| **Qualunque modulo NMEA** (MT3339, Quectel L80, SIM28, ATGM336H, cloni) | 🔧 pronto | `GPS_NMEA_GENERIC` | Resta a 1 Hz invece di 5 Hz |
+| **u-blox NEO-6M** | montato | u-blox, comandi vecchi | 5 Hz (il chip non va oltre) |
+| **u-blox NEO-M8N, Beitian BN-220 / BN-880** | 🔧 **consigliato** | u-blox, comandi vecchi | 10 Hz |
+| **u-blox NEO-M9N** | 🔧 | u-blox, comandi vecchi | 10 Hz |
+| **u-blox MAX-M10S, Beitian serie M10** | 🔧 | u-blox, chiavi CFG-VALSET | 10 Hz |
+| **ATGM336H, Quectel L76K** | 🔧 | CASIC (`$PCAS`) | 10 Hz |
+| **Quectel LC76G / LC86G / LC29H** | 🔧 | Airoha (`$PAIR`) | 10 Hz |
+| **Qualunque altro modulo NMEA** | 🔧 | - | Quella di fabbrica, di solito 1 Hz |
 
-> ⚠️ **`GPS_UBLOX` e `GPS_UBLOX_M10` non si coprono a vicenda.** Dalla generazione M10 u-blox ha rimosso il meccanismo di configurazione legacy: `UBX-CFG-MSG` e `UBX-CFG-RATE` non sono più supportati, sostituiti dalle chiavi `UBX-CFG-VALSET`. Un M8 accetta entrambi, un M10 solo il nuovo, un M6 solo il vecchio.
->
-> Scegliere il driver sbagliato non rompe niente in modo vistoso: il modulo resta a 1 Hz di fabbrica mentre `GPS_FIX_TIMEOUT_MS` è tarato sul rate alto, il fix (`gps::fix().valid`) lampeggia più volte al secondo, e a rimetterci sono il lap timing (`laps::update()`) e il canale velocità. Il sintomo (lap timing che salta passaggi, velocità a zero a intermittenza) non assomiglia alla causa.
->
-> Per questo il driver M10 **legge gli ACK**, a differenza di quello M6/M8 (sono due rami di `src/drivers/GpsModule.cpp`). Se una chiave viene rifiutata, il monitor seriale lo dice al boot nominando l'impostazione. È anche ciò che ha reso quel driver scrivibile senza avere il modulo in mano: le chiavi numeriche vengono dal manuale d'interfaccia e non sono verificate sul campo, ma un errore si presenta come un NAK stampato, non come un GPS che si comporta male in pista.
+**Come riconosce la famiglia.** Chiede al modulo la sua versione col protocollo UBX: se risponde è un u-blox, e la versione hardware dice se vuole i messaggi di configurazione vecchi (fino all'M9) o le chiavi nuove (M10: quelli vecchi sono stati tolti). Se non risponde, manda i comandi delle due famiglie CASIC e Airoha: ognuna ignora quelli dell'altra. In tutti i casi spegne le frasi NMEA inutili, porta la seriale a 115200 (a 9600 i 10 Hz non ci stanno) e chiede 10 Hz, o 5 se il modulo rifiuta.
 
-Passare al driver generico **non** toglie funzionalità: la lettura è NMEA standard, che parlano tutti. Si perde risoluzione, e conviene sapere dove:
+**Cosa cambia la frequenza.** A 100 km/h tra due posizioni ci sono 2,8 m a 10 Hz, 5,6 m a 5 Hz, 28 m a 1 Hz. Il passaggio sul traguardo è interpolato fra le due posizioni, ma più sono vicine più l'ipotesi di velocità costante regge: i tempi sul giro sono più precisi e il delta si aggiorna più spesso.
 
-- **Lap timing**: a 100 km/h, un punto al secondo significa 28 metri fra un campione e l'altro, contro 5.6 metri a 5 Hz. Il passaggio sul traguardo è interpolato fra le due posizioni a cavallo della linea, ma su 28 metri l'ipotesi di velocità costante regge meno che su 5.6: i tempi sul giro diventano più rumorosi, e il delta sul giro si aggiorna una volta al secondo.
-- **Traccia e forma del tracciato**: cinque volte meno punti, quindi disegno più spigoloso.
+Le impostazioni vanno nella RAM del modulo: spento, torna come di fabbrica, e all'accensione successiva il firmware lo riconfigura. Se l'ESP32 si riavvia col GPS ancora acceso (dopo un aggiornamento via WiFi), il modulo è ancora a 115200: per questo la velocità viene cercata e non data per scontata.
 
-`GPS_FIX_TIMEOUT_MS` è già allargato a 3000 ms su quel ramo. Non è cosmetico: col timeout da 700 ms tarato sul 5 Hz, un modulo a 1 Hz avrebbe il fix "scaduto" per i 300 ms prima di ogni aggiornamento, e il fix lampeggerebbe fra valido e non valido più volte al secondo, con conseguenze reali sul lap timing e sul canale velocità.
+---
+
+## MicroSD
+
+Con una scheda microSD (FAT32) le sessioni vanno lì invece che sulla flash interna: centinaia di ore invece di circa cinque. Tracciati, record e impostazioni restano sulla flash interna. La scheda viene cercata **all'accensione**: inserita dopo, si vede al riavvio successivo.
+
+- **Modulo**: uno a 3,3 V, o un modulo con regolatore e traslatore di livello (quelli a 6 pin con "VCC 5V" vanno alimentati a 5 V). Pin SPI e CS sono nella tabella dei microcontrollori qui sopra.
+- **Pagina Memoria e sito**: mostrano lo spazio della scheda (in GB) e, sul sito, "microSD" accanto a Memoria.
+- **Non sul C3**: non ha pin liberi per l'SPI.
+- **Costo**: il supporto per la FAT occupa circa 50 KB di flash. Su una scheda senza lettore si toglie con `-DNO_SD_CARD` (o commentando `SD_CARD` in `Config.h`).
 
 ---
 
@@ -147,55 +188,77 @@ Passare al driver generico **non** toglie funzionalità: la lettura è NMEA stan
 
 Quattro GPIO con pull-up interna, un capo al pin e l'altro a GND: nessuna resistenza esterna. Si spostano su qualunque pin libero cambiando `PIN_BTN_*` in `Config.h`.
 
-Cambiarne il **numero** è un'altra cosa: non è un problema hardware ma di interfaccia (con tre tasti servirebbe ripensare come si naviga fra 10 pagine e si accede alle azioni di `handleButtons()` in `src/App.cpp`). Fuori dallo scopo della modularità.
+Cambiarne il **numero** è un'altra cosa: non è un problema hardware ma di interfaccia (con tre tasti servirebbe ripensare come si naviga fra le pagine e si accede alle azioni di `handleButtons()` in `src/App.cpp`).
 
 ---
 
-## ⚠️ IMU: il BNO055 è fuori produzione
+## Alimentazione dalla moto 🔧
 
-Bosch lo dichiara **"not recommended for new designs"**. Resterà reperibile a lungo sui breakout già prodotti, ma non è un componente su cui costruire. Il successore è la famiglia **BNO085 / BNO086**, pin-for-pin compatibile e con la sensor fusion ancora dentro al chip.
+Sul banco basta l'USB. Sulla moto conviene prendere corrente dall'impianto: nessuna batteria da ricaricare, e la scatola si accende e si spegne con la chiave. **Niente di questa sezione è ancora stato montato e provato**: sono le scelte standard per l'elettronica a 12 V di un veicolo, da verificare sul primo montaggio.
 
-| | BNO055 (montato) | BNO085 / BNO086 |
-|---|---|---|
-| Stato | fine vita | attuale |
-| Sensor fusion | nel chip, 100 Hz | nel chip, 400 Hz |
-| Indirizzo I2C | `0x28` / `0x29` | `0x4A` / `0x4B` (nessuna collisione) |
-| Libreria | `Adafruit BNO055` | `Adafruit BNO08x` |
-| Protocollo | registri I2C classici | SH-2 / SHTP, **completamente diverso** |
-| Calibrazione | da rifare a ogni accensione | salvata automaticamente |
+### Il collegamento base
 
-**Il seam c'è, il driver no.** L'IMU sta dietro un contratto come gli altri componenti (`src/drivers/Imu.h`), quindi scrivere il ramo BNO085 in `src/drivers/Imu.cpp` è un lavoro circoscritto a un file: sarebbero ~120 righe, e la libreria Adafruit ricava già gli angoli dai quaternioni.
+```
++12 V sotto chiave ── fusibile 1 A ──┬── diodo ──── convertitore ──── 5 V ──→ VIN dell'ESP32
+                                     │  Schottky    12 V → 5 V
+                                     └── TVS ── GND                     GND ──→ GND dell'ESP32
+```
 
-Manca perché **tre cose non si deducono senza il sensore in mano**:
+- **Il +12 V va preso sotto chiave**, per esempio dalla presa accessori o dal filo di una luce di posizione, e non direttamente dalla batteria: così si spegne con la moto e non la scarica da ferma.
+- **Fusibile da 1 A** a lamella, il più vicino possibile al punto in cui prendi corrente. Protegge il cablaggio della moto, non l'elettronica.
+- **Diodo Schottky in serie** (per esempio SS34 o 1N5819): se inverti i fili non brucia niente.
+- **Diodo TVS** tra il +12 V e la massa (per esempio SMBJ24A): taglia i picchi che l'impianto di una moto produce, soprattutto se la batteria si stacca col motore acceso. Molti convertitori economici non ce l'hanno.
+- **Convertitore switching da 12 V a 5 V**, almeno 1 A, con ingresso che regge fino a 30 V o più. Va bene anche un buon caricatore USB da auto. Non un regolatore lineare tipo 7805: per scendere da 14 V a 5 V scalderebbe parecchio.
+- **I 5 V vanno sul pin VIN** (o 5V) della DevKit, mai sul 3V3. Se colleghi anche l'USB al computer con la moto accesa, controlla che la tua scheda abbia il diodo sull'alimentazione USB (la DevKit V1 di solito ce l'ha).
 
-1. **Quale angolo del quaternione è la piega e quale l'impennata**, dato il montaggio fisico. Sul BNO055 questa mappatura è costata una versione intera: la v6.3 li aveva scambiati, e si è scoperto solo provando.
-2. **I segni.** Ci sono i `SIGN_*` in `Config.h` per invertirli, ma vanno determinati sul banco.
-3. **La rimappatura degli assi.** Sul BNO055 la fa il chip (`REMAP_CONFIG_P5`), il BNO085 non ha quella feature: la stessa rotazione va rifatta in software, e **scambiare due assi non è un'inversione di segno**.
+### Spegnere senza perdere la sessione (opzionale)
 
-Un driver scritto indovinando queste tre cose compilerebbe e sembrerebbe finito. Su un dispositivo che mostra "PERICOLO GRIP" in base all'angolo di piega, un asse scambiato non è un difetto cosmetico.
+Col collegamento base, girare la chiave mentre registri fa perdere gli ultimi secondi e il riepilogo della sessione, tempi sul giro compresi: il sito la mostra come "interrotta senza riepilogo". Con due aggiunte il firmware si accorge della chiave e chiude la sessione prima che manchi la corrente.
 
-Da sapere in anticipo: la schermata di calibrazione all'avvio (`waitImuCalibration()` in `src/App.cpp`) perderebbe gran parte del suo senso, perché il BNO085 salva la calibrazione da solo invece di ripartire scalibrato a ogni accensione.
+**1. Un condensatore che tiene acceso l'ESP32 per un attimo.** Un supercondensatore da 0,47-1 F e 5,5 V tra i 5 V e la massa, *dopo* un diodo Schottky (il diodo impedisce che si scarichi all'indietro nel convertitore). L'ESP32 col WiFi acceso assorbe fino a ~250 mA e il suo regolatore smette di funzionare sotto ~4,3 V: da 4,7 V (5 V meno il diodo) un condensatore da 0,47 F dura circa 0,47 × 0,4 / 0,25 ≈ **0,75 s**. Chiudere la sessione richiede meno di un decimo di secondo. All'accensione il condensatore scarico assorbe molta corrente per qualche secondo: un convertitore con limitazione di corrente lo regge, uno senza potrebbe non partire al primo colpo.
+
+**2. Un partitore che legge i 12 V.** Da prendere *prima* del diodo e del condensatore, altrimenti vedrebbe la tensione tenuta su dal condensatore:
+
+```
++12 V sotto chiave (dopo il fusibile) ── 100 kΩ ──┬── pin ADC dell'ESP32
+                                                  ├── 22 kΩ ── GND
+                                                  └── 100 nF ── GND
+```
+
+Con questi valori 14,4 V (moto in moto) diventano 2,6 V sul pin; il condensatore da 100 nF filtra i disturbi dell'accensione. Il pin deve essere dell'**ADC1**, perché l'ADC2 smette di funzionare col WiFi acceso: sull'ESP32 classico i GPIO 32-39 (il 34 è comodo, è solo ingresso).
+
+**3. In `Config.h`** scommenta `#define POWER_SENSE_PIN 34` (o il pin che hai usato). `POWER_SENSE_DIVIDER` va cambiato solo se usi resistenze diverse; `POWER_OFF_VOLTS` (6 V) è la soglia sotto cui la chiave è considerata spenta: l'avviamento fa scendere la tensione intorno ai 9-10 V, quindi resta sopra.
+
+Quando la tensione resta sotto la soglia per 60 ms, il firmware chiude la registrazione col suo riepilogo e il display mostra `SESSIONE SALVATA`. Il monitor seriale stampa la tensione letta ogni cinque secondi (`Power : 13.8 V`): è il modo di controllare il partitore prima di andare in moto. La prova completa è in [COLLAUDO.md](COLLAUDO.md).
+
+
+---
+
+## ⚠️ Il BNO055 è fuori produzione
+
+Bosch lo dichiara **"not recommended for new designs"**. Resterà reperibile a lungo sui breakout già prodotti, ma per una scatola nuova conviene un **BNO085/BNO086** (stesso ingombro, fusione nel chip, calibrazione salvata da sola) o un **ISM330DHCX / LSM6DSO**, letti col filtro del firmware che tiene conto della velocità.
+
+Cambiando IMU nella stessa scatola vanno rifatte le quattro prove dell'orientamento: il BNO055 usa `IMU_BNO055_REMAP` e i `SIGN_*`, le altre `IMU_AXES`. La schermata di calibrazione all'avvio esiste solo per il BNO055 (il suo magnetometro parte scalibrato a ogni accensione): con le altre si chiude da sola.
 
 ---
 
 ## Componenti esclusi
 
-| Componente | Motivo dell'esclusione |
+| Componente | Motivo |
 |---|---|
-| **IMU senza fusion** (MPU6050, ICM-20948) | Richiedono un filtro Madgwick o Mahony scritto nel firmware: è lavoro reale, non un'interfaccia. Per il BNO085, che la fusion ce l'ha, vedi la sezione qui sopra. |
-| **Storage diverso dalla flash interna** | La microSD richiede il level shifter 5V→3.3V già scartato in passato; una flash SPI esterna è un porting diverso di LittleFS. |
 | **Flash da meno di 4 MB** | L'aggiornamento via WiFi usa le due aree applicazione dello schema di partizioni di default. |
-| **Microcontrollore fuori dalla famiglia Espressif** | Il vincolo non è la CPU ma il **WiFi**: `WiFi.h` + `WebServer.h` + LittleFS nativi esistono solo lì. STM32 richiede hardware WiFi esterno, Arduino classico non ha la RAM per il web server, Arduino WiFi userebbe WiFiNINA e imporrebbe di riscrivere l'interfaccia web quasi da zero. Gli ESP32 diversi dal classico invece sono supportati: vedi [Microcontrollore](#microcontrollore-quale-esp32). |
-| **ESP8266** | Ha il WiFi, ma con API diverse (`ESP8266WiFi.h`, `ESP8266WebServer.h`) e una sola UART completa, che serve già al monitor seriale. Non è uno scambio di configurazione ma un porting. |
+| **Display diversi da 128×64 monocromatici** | Il layout delle pagine è disegnato a mano per 128×64. |
+| **Microcontrollori fuori dalla famiglia Espressif** | Il vincolo è il **WiFi**: `WiFi.h` + `WebServer.h` + LittleFS nativi esistono solo lì. STM32 richiede hardware WiFi esterno, Arduino classico non ha la RAM per il web server. |
+| **ESP8266** | Ha il WiFi, ma API diverse e una sola UART completa, già del monitor seriale: è un porting, non un cambio di configurazione. |
 
 ---
 
-## Come si cambia un componente
+## Montare un componente diverso
 
-1. In `Config.h`, sezione **DRIVER SELECTION**: commenta la macro attuale, scommenta quella nuova.
-2. Installa la libreria del driver nuovo (Arduino IDE → Gestore librerie).
-3. Se il componente è I2C, controlla l'indirizzo nella mappa qui sopra e correggilo in `Config.h` se il tuo modulo usa quello alternativo.
-4. Compila. Se non compila, non è un problema tuo: è un bug del driver, segnalalo.
-5. Prova sull'hardware: è l'unico passo che la compilazione non sostituisce.
+1. **Collegalo** sullo stesso bus (I2C: SDA/SCL, 3,3 V, GND) e controlla che il suo indirizzo non sia già occupato (mappa qui sopra).
+2. **Accendi** e guarda la schermata d'avvio: il nome del componente trovato compare nella sua riga. Una croce vuol dire che non risponde: cablaggio o alimentazione.
+3. **Solo se serve**: il display su SPI o un controller diverso dall'SSD1306, e un BNO085 (`IMU_WITH_BNO08X`), si dicono in `Config.h`.
+4. **Per un'IMU**, rifai le quattro prove dell'orientamento.
+5. **Prova sull'hardware**: [COLLAUDO.md](COLLAUDO.md).
 
 Per aggiungere un componente che non è in questo elenco: [DRIVER.md](DRIVER.md).

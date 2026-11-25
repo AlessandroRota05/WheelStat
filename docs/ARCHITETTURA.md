@@ -2,6 +2,8 @@
 
 Per chi vuole leggere o modificare il codice. Per usare il dispositivo basta il [README](../README.md).
 
+*English version: [en/ARCHITECTURE.md](en/ARCHITECTURE.md).*
+
 ## La cartella
 
 ```
@@ -18,15 +20,16 @@ WheelStat/
     LapTimer, Tracks, Records            giri, tracciati, record
     Recorder, Sessions, SessionFormat    scrittura e lettura delle sessioni
     Storage, Buttons, Util, Version
+    Power              i 12 V della moto: chiude la sessione quando si gira la chiave (opzionale)
     core/              logica senza Arduino, testata sul PC
-    drivers/           un file per categoria di componente
+    drivers/           i componenti, riconosciuti all'avvio: weather/, imu/, gps/ (DRIVER.md)
     ui/                pagine OLED
     web/               sito
     i18n/              testi in italiano e in inglese
   test/                test di src/core
   tools/oled-preview/  le schermate OLED disegnate sul PC, per la documentazione
   Media/               immagini della documentazione: oled/ e web/ (it, en), hardware/
-  docs/
+  docs/                documenti in italiano; docs/en/ gli stessi in inglese
 ```
 
 Arduino compila da solo, ricorsivamente, tutto ciò che trova in `src/`. La cartella dello sketch deve chiamarsi `WheelStat`.
@@ -45,7 +48,8 @@ Arduino compila da solo, ricorsivamente, tutto ciò che trova in `src/`. La cart
 
 | Ordine | Lavoro | Ogni quanto |
 |---|---|---|
-| 1 | `weather::update()` | `WEATHER_INTERVAL_MS` (dipende dal sensore) |
+| 0 | `power::keyTurnedOff()` | 20 ms, solo con `POWER_SENSE_PIN`: per primo, perché a chiave spenta ogni millisecondo conta |
+| 1 | `weather::update()` | `weather::intervalMs()`: 1-2 s, lo decide il sensore trovato |
 | 2 | `motion::update()` → `stats::sample()` | ogni giro: non si perdono i picchi |
 | 3 | `gps::update()` | ogni giro: l'NMEA va svuotato subito |
 | 4 | `laps::update()` → `tracks::onLapEvent()` | ogni giro, sulle posizioni appena lette |
@@ -71,6 +75,10 @@ Tutto ciò che si può decidere senza toccare un sensore sta in `src/core/`, in 
 | `SessionCodec` | Formato binario delle sessioni, riga CSV | `src/Recorder`, `src/Sessions`, sito |
 | `SettingsRules` | Valori iniziali e limiti delle impostazioni | `src/Settings` |
 | `GripRisk.h` | Formula del rischio grip | `src/Weather`, CSV |
+| `Ahrs` | Assetto dalle IMU senza fusione: filtro di Madgwick con la correzione per curva e frenata dalla velocità GPS | `src/Motion` |
+| `AxisMap.h` | Dagli assi del chip a quelli della moto | `src/Motion` |
+| `SensorMath` | Conversioni e checksum dei sensori letti senza libreria | `src/drivers/weather/` |
+| `GpsCommands` | Comandi ai GPS: frasi `$PCAS`/`$PAIR` e frame UBX con i loro checksum | `src/drivers/gps/` |
 
 I moduli corrispondenti in `src/` sono involucri sottili: leggono i sensori e chiamano il core.
 
@@ -80,7 +88,7 @@ I moduli corrispondenti in `src/` sono involucri sottili: leggono i sensori e ch
 pio test -e native
 ```
 
-Serve `g++` nel PATH. Sono in `test/test_core/` e simulano una guida dando al cronometro le posizioni che manderebbe un GPS: un circuito circolare a velocità costante, di cui si conosce il tempo esatto. Ciò che i test non possono coprire è tutto il resto: sensori, display, flash, WiFi. Per quello resta solo la prova sul dispositivo.
+Serve `g++` nel PATH. Sono in `test/test_core/` e simulano una guida: al cronometro danno le posizioni che manderebbe un GPS su un circuito circolare a velocità costante, di cui si conosce il tempo esatto; al filtro d'assetto i dati che darebbero accelerometro e giroscopio in una curva a 20° e a 40° e in una frenata. Le conversioni dei sensori e i checksum dei comandi GPS sono provati contro gli esempi dei datasheet. Ciò che i test non possono coprire è tutto il resto: sensori, display, flash, WiFi. Per quello resta solo la prova sul dispositivo.
 
 I driver non hanno test: si verificano compilando tutte le combinazioni ([DRIVER.md](DRIVER.md#la-matrice-di-compilazione)).
 
@@ -96,7 +104,7 @@ Servono `g++`, Python con Pillow e la libreria GFX dove la installa l'Arduino ID
 
 ## I file sulla flash
 
-Partizione LittleFS da 1,4 MB (schema di default da 4 MB, che ha anche le due aree applicazione usate dall'aggiornamento via WiFi).
+Partizione LittleFS da 1,4 MB (schema di default da 4 MB, che ha anche le due aree applicazione usate dall'aggiornamento via WiFi). Con una microSD le sessioni (`LOG_n.BIN`) vanno sulla scheda; tutto il resto resta qui. Chi legge o scrive sessioni passa da `storage::sessions()`, che restituisce l'una o l'altra.
 
 | File | Formato | Contenuto |
 |---|---|---|
@@ -131,11 +139,15 @@ SessionFooter  860 byte   massimi, eventi, giri e settori
 | `Web.cpp` | Server, rotte, access point, intestazione comune |
 | `WebAssets.cpp` | Foglio di stile, pagina Live |
 | `WebPages.cpp` | Sessioni, Tracciati, Confronta |
-| `WebSession.cpp` | Pagina Grafici |
+| `WebSession.cpp` | Pagina Grafici: mappa, grafici, tabella dei giri col giro ideale, due giri sovrapposti |
 | `WebSettings.cpp` | Impostazioni, aggiornamento firmware |
 | `WebActions.cpp` | JSON live, download, azioni |
 
+**Portale captive.** Col WiFi acceso gira anche un piccolo DNS che risponde a ogni nome con l'indirizzo del dispositivo, e le richieste per un host che non è il nostro vengono rimandate alla home. Il telefono, appena collegato, controlla un indirizzo del suo produttore per capire se c'è internet; ricevendo la nostra pagina mostra "accedi alla rete", che apre il sito. Insieme al QR della pagina 10 dell'OLED, ci si collega senza digitare niente.
+
 Le azioni che cambiano le impostazioni e il caricamento del firmware sono `POST`. Durante una registrazione tutto ciò che legge o scrive file è rifiutato (`rejectWhileRecording`).
+
+**Due giri sovrapposti.** Due giri non hanno mai lo stesso numero di campioni né la stessa traiettoria, quindi non si confrontano campione per campione ma nello stesso *punto* della pista: ognuno viene misurato lungo il proprio percorso e diviso in 300 frazioni uguali della sua lunghezza, e a ogni frazione si interpolano velocità, piega e tempo di entrambi. La differenza dei tempi in ogni punto è il grafico del distacco. Serve il GPS: un giro senza posizioni non si può sovrapporre.
 
 **Provare una pagina senza il dispositivo.** Corpo e script della pagina Grafici non contengono testi tradotti (arrivano dal dizionario `T`), quindi si possono estrarre dal sorgente e aprire in un browser con un file di sessione finto. È così che è stata verificata.
 

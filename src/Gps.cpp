@@ -16,8 +16,12 @@ static core::GpsClock fixClock;
 // While a web page is being served the loop does not come back here for a
 // good fraction of a second. The reports of that time must still be there
 // afterwards, each with the receiver's own timestamp: lap times are made of
-// them. The default buffer holds barely one.
-constexpr size_t UART_RX_BUFFER = 1024;
+// them. The default buffer holds barely one; at 10 Hz and 115200 baud
+// this one holds well over a second.
+constexpr size_t UART_RX_BUFFER = 2048;
+
+// Measured at boot from the rate the module really reached.
+static uint32_t fixTimeoutMs = 3000;
 
 // Reports waiting for the lap timer. A handful is plenty: they are taken
 // out in the same loop pass that parsed them.
@@ -33,36 +37,12 @@ static uint32_t lastTimeStamp  = UINT32_MAX;
 // A course older than this says where the bike WAS heading.
 constexpr uint32_t COURSE_MAX_AGE_MS = 2000;
 
-// Opening the UART proves nothing: it opens without errors even into thin
-// air. The only proof of a module is bytes coming out of it, and a powered
-// receiver sends NMEA even without a fix (GGA and RMC with empty fields).
-//
-// The pair "$G" is looked for rather than any byte because a floating RX
-// pin produces noise now and then, but not the start of an NMEA sentence.
-// Every GNSS talker starts with G: GP, GN, GL, GA, GB.
-//
-// The full timeout is only paid when the module is missing.
-static bool listenForNmea(uint32_t timeoutMs) {
-  uint32_t start = millis();
-  bool dollar = false;
-
-  while (millis() - start < timeoutMs) {
-    while (gpsSerial.available() > 0) {
-      char c = gpsSerial.read();
-      if (dollar && c == 'G') return true;
-      dollar = (c == '$');
-    }
-    delay(1);
-  }
-  return false;
-}
-
+// Speed, family and rate are all found by the driver (see GpsModule.h).
 bool begin() {
-  gpsSerial.setRxBufferSize(UART_RX_BUFFER);  // only takes effect before begin()
-  gpsSerial.begin(GPS_BAUD, SERIAL_8N1, PIN_GPS_RX, PIN_GPS_TX);
+  gpsSerial.setRxBufferSize(UART_RX_BUFFER);  // only takes effect before the UART opens
   delay(200);  // the module must finish its own boot before taking commands
-  gpsModule::configure();
-  current.modulePresent = listenForNmea(GPS_BOOT_LISTEN_MS);
+  current.modulePresent = gpsModule::begin();
+  fixTimeoutMs = gpsModule::fixTimeoutMs();
   return current.modulePresent;
 }
 
@@ -125,7 +105,7 @@ void update() {
   // A fix only counts if recent: age() keeps growing until a new valid
   // sentence arrives, so a lost fix expires by itself.
   current.valid = parser.location.isValid() &&
-                  parser.location.age() < GPS_FIX_TIMEOUT_MS;
+                  parser.location.age() < fixTimeoutMs;
 
   if (current.valid) {
     current.lat      = parser.location.lat();

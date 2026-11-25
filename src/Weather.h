@@ -20,10 +20,12 @@ struct Reading {
 
 bool begin();
 
-// Reads the sensor and recomputes the grip risk. Call it every
-// WEATHER_INTERVAL_MS (Config.h).
+// Reads the sensor and recomputes the grip risk. Call it every intervalMs().
 void update();
 
 const Reading &reading();
+
+// How often update() is worth calling: a property of the sensor found.
+uint32_t intervalMs();
 
 }  // namespace weather

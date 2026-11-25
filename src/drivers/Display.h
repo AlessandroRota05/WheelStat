@@ -12,8 +12,12 @@
   the page transition scrolls two frames into each other with memcpy. Both
   Adafruit_SSD1306 and Adafruit_GrayOLED have it.
 
-  Only the SSD1306 is tested on hardware. The other three compile; check
-  them on first assembly, the address above all (0x3C or 0x3D).
+  The controller is chosen in Config.h (DISPLAY_*): the ones that share an
+  address cannot be told apart by asking. The address itself (0x3C or
+  0x3D) is found at boot. With DISPLAY_SPI the panel is on the SPI bus
+  instead, shared with the microSD.
+
+  Only the SSD1306 on I2C is tested on hardware.
   ===========================================================================
 */
 
@@ -39,7 +43,7 @@
 
 extern DisplayDriver display;
 
-// Powers the panel up. False if nothing answers on the I2C address.
+// Powers the panel up. False if nothing answers on either I2C address.
 // Wire.begin() must already have been called.
 bool displayBegin();
 

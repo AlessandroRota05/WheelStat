@@ -34,6 +34,7 @@ enum class Page : uint8_t {
   Records2,
   Storage,
   WiFi,
+  WiFiQr,     // only while the WiFi is on: skipped otherwise
   Count
 };
 
@@ -50,7 +51,7 @@ void splashIntro();
 // the last row with dots says on which component.
 void checklistBegin();
 void checklistPending(int row, const char *label, const char *driverName);
-void checklistResult(int row, bool ok);
+void checklistResult(int row, bool ok, const char *driverName);
 
 // Calibration screen: shows the figure-eight to trace with the box in hand.
 void drawCalibration(uint8_t level);

@@ -250,4 +250,85 @@ v11.0 funzioni nuove e quattro scelte di progetto cambiate. (!) segna
       PlatformIO dell'ESP32 classico, pagina Grafici provata in un
       browser con una sessione sintetica. Su hardware resta da provare
       tutto, v10.0 compresa.
+
+v11.1 settori, confronto tra giri, alimentazione dalla moto.
+      - Giro ideale (somma dei settori migliori della sessione) sulla
+        pagina Live e nei Grafici. Live: settori dell'ultimo giro col
+        distacco dal migliore della sessione. Grafici: tabella dei giri
+        col distacco dal migliore, settore migliore di ogni colonna in
+        verde e riga del giro ideale.
+      - Due giri sovrapposti nei Grafici: scelto un giro, se ne sceglie
+        un secondo. I due sono confrontati nello stesso punto della
+        pista (ognuno diviso in 300 frazioni della propria lunghezza),
+        con velocita', piega, impennata e G laterale sovrapposti, il
+        secondo giro sulla mappa e un grafico del distacco punto per
+        punto.
+      - Alimentazione dalla moto (opzionale, POWER_SENSE_PIN in
+        Config.h): un partitore legge i 12 V sotto chiave; quando restano
+        sotto 6 V per 60 ms la registrazione viene chiusa col suo
+        riepilogo, mentre un supercondensatore tiene acceso l'ESP32.
+        Schema e componenti in HARDWARE.md, mai montati.
+      - OLED: barra in alto con icone (GPS col numero di satelliti,
+        bandiera del traguardo, WiFi, pallino REC col tempo di
+        registrazione; tensione della moto con POWER_SENSE_PIN) al posto
+        di "WHEELSTAT SAT REC". Piega con i massimi della sessione ai
+        lati; Forza G con valori a due decimali e scia dell'ultimo
+        secondo sul mirino; Memoria con barra, spazio libero e ore di
+        registrazione rimaste; tempi in m:ss.
+      - OLED: pagina 10, QR del WiFi (solo a WiFi acceso): inquadrandolo
+        il telefono si collega senza digitare la password. Usa il
+        generatore QR del core ESP32 e viene ricalcolato solo quando
+        cambiano nome o password.
+      - Sito: portale captive (DNS che risponde a tutto e rimando alla
+        home), cosi' il telefono appena collegato propone di aprire il
+        sito. Barra in alto fissa con icone, su una riga anche sui
+        telefoni stretti; contenuto che entra in dissolvenza; sessioni
+        come schede che aprono i grafici, con CSV/GPX/Elimina sotto;
+        colonna A-B nel Confronta; record dei tracciati a griglia; ore di
+        registrazione che si aggiornano mentre cambi i campioni al
+        secondo; indicatore di caricamento nei Grafici.
+      - docs/COLLAUDO.md: le prove in ordine, dal banco alla pista.
+      - Documenti in inglese in docs/en/ (ARCHITECTURE, DRIVERS,
+        HARDWARE, TESTING); il CHANGELOG resta in italiano.
+      Verificato: compilazione dell'ESP32 classico con e senza
+      POWER_SENSE_PIN, test sul PC, pagine Live e Grafici in un browser
+      con dati sintetici. Su hardware resta da provare tutto.
+
+v12.0 componenti riconosciuti da soli, molti nuovi.
+      - (!) Niente piu' scelta del sensore meteo, dell'IMU e del GPS in
+        Config.h: all'avvio il firmware li cerca e usa quello che
+        risponde. Le macro WEATHER_*, IMU_BNO055, GPS_* e gli indirizzi
+        I2C_ADDR_* sono sparite; restano il controller del display
+        (non si puo' chiedere), DISPLAY_SPI, IMU_WITH_BNO055/BNO08X (le
+        loro librerie costano flash) e l'orientamento.
+      - Driver un file per famiglia di chip (src/drivers/weather/, imu/,
+        gps/), con un elenco per categoria provato in ordine. I sensori
+        meteo e le IMU senza fusione sono scritti senza libreria, dal
+        datasheet: conversioni e checksum in src/core/SensorMath, provati
+        sul PC. Le librerie meteo Adafruit non servono piu'.
+      - Meteo: DHT22, DHT11, SHT4x, SHT3x, SHTC3, HDC1080, Si7021/HTU21D,
+        HTU31D, AHT10/20/21/25, AM2320, BME280 (il BMP280 viene
+        riconosciuto e spiegato). Letture in due tempi: nessun sensore
+        blocca il ciclo aspettando la conversione.
+      - IMU: BNO055 (percorso invariato), BNO085/086 (libreria, da
+        attivare), MPU6050/6500/9250, ICM-20602/20689, ICM-20948,
+        LSM6DS3/DSL/DSO/DSOX, ISM330DHCX. Per tutte tranne il BNO055,
+        filtro di Madgwick in src/core/Ahrs con la correzione per curva e
+        frenata dalla velocita' GPS: senza, in curva la piega si perde. Lo
+        zero del giroscopio e' misurato all'avvio. Posizione nella
+        scatola con IMU_AXES.
+      - GPS: velocita' della seriale cercata (9600, 38400, 115200,
+        57600), famiglia riconosciuta (u-blox 6/7/M8/M9 coi messaggi
+        vecchi, M10 con CFG-VALSET; CASIC e Airoha coi loro comandi),
+        seriale portata a 115200 e frequenza a 10 Hz (5 se rifiutata),
+        poi frequenza misurata e timeout del fix calcolato da quella.
+      - Display: indirizzo 0x3C/0x3D trovato da solo; SSD1306 e SH1106
+        anche su SPI (DISPLAY_SPI).
+      - microSD (SPI, FAT32): se all'avvio c'e' una scheda le sessioni
+        vanno li'. Non sul C3. Dimensioni a 64 bit e mostrate in KB/MB/GB.
+      - La schermata d'avvio scrive il nome del componente trovato dopo
+        averlo cercato.
+      Verificato: 52 test sul PC, compilazione delle combinazioni di
+      schede, lingue, display, BNO08x, microSD. Nessuno dei componenti
+      nuovi e' mai stato collegato.
 ```

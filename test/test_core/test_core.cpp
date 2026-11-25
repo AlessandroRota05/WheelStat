@@ -12,7 +12,11 @@
 #include <string.h>
 #include <unity.h>
 
+#include "src/core/Ahrs.h"
+#include "src/core/AxisMap.h"
 #include "src/core/Gate.h"
+#include "src/core/GpsCommands.h"
+#include "src/core/SensorMath.h"
 #include "src/core/GpsClock.h"
 #include "src/core/GripRisk.h"
 #include "src/core/LapLogic.h"
@@ -22,6 +26,190 @@
 #include "src/core/Trace.h"
 
 using namespace core;
+
+// ===========================================================================
+// Attitude filter (Ahrs) - simulated physics
+// ===========================================================================
+// Bike axes: x forward, y left, z up. A coordinated corner at constant
+// speed v and lean phi (positive right) has yaw rate W = -g tan(phi) / v
+// (negative = turning right). With R = Rz(psi) Rx(phi), the sensors read
+//   specific force  f = Rx(-phi) (0, v W, g)
+//   angular rate    w = (phi', W sin(phi), W cos(phi))
+// which is what the accelerometer and gyro of a real bike would report.
+
+static void cornerSensors(float phiRad, float phiRate, float v, float gyro[3], float accel[3]) {
+  const float g = 9.81f;
+  float W = v > 0 ? -g * tanf(phiRad) / v : 0;
+  float c = cosf(phiRad), s = sinf(phiRad);
+  accel[0] = 0;
+  accel[1] = c * v * W + s * g;
+  accel[2] = -s * v * W + c * g;
+  gyro[0] = phiRate;
+  gyro[1] = W * s;
+  gyro[2] = W * c;
+}
+
+void test_ahrs_still_and_level() {
+  core::Ahrs ahrs;
+  float gyro[3] = {0, 0, 0}, accel[3] = {0, 0, 9.81f};
+  core::Attitude a = {};
+  for (int i = 0; i < 400; i++) a = ahrs.update(gyro, accel, 0.005f);
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 0.0f, a.leanDeg);
+  TEST_ASSERT_FLOAT_WITHIN(0.1f, 0.0f, a.pitchDeg);
+  TEST_ASSERT_FLOAT_WITHIN(0.05f, 0.0f, a.accelLong);
+  TEST_ASSERT_FLOAT_WITHIN(0.05f, 0.0f, a.accelLat);
+}
+
+// Upright, then into a right-hand corner: lean grows to `degrees` over two
+// seconds and holds for ten, at 90 km/h. The filter must follow it.
+static float rideCorner(bool knowSpeed, float degrees) {
+  core::Ahrs ahrs;
+  const float dt = 0.005f, v = 25.0f, target = degrees * 3.14159265f / 180;
+  float gyro[3], accel[3], t = 0;
+  core::Attitude a = {};
+  for (int i = 0; i < 4000; i++, t += dt) {
+    float phi = t < 2 ? target * t / 2 : target;
+    float rate = t < 2 ? target / 2 : 0;
+    cornerSensors(phi, rate, v, gyro, accel);
+    ahrs.setSpeed(knowSpeed ? v : 0, t);
+    a = ahrs.update(gyro, accel, dt);
+  }
+  return a.leanDeg;
+}
+
+void test_ahrs_steady_corner_reads_the_lean() {
+  TEST_ASSERT_FLOAT_WITHIN(1.5f, 40.0f, rideCorner(true, 40));
+  TEST_ASSERT_FLOAT_WITHIN(1.0f, 20.0f, rideCorner(true, 20));
+}
+
+// The reason for the speed correction: without it, in a long corner the
+// accelerometer sees the bike's own "up" (about 1 G at moderate lean, so it
+// is believed) and pulls the lean back towards zero. Kept as a test so
+// nobody removes the correction as dead weight.
+void test_ahrs_steady_corner_without_speed_cannot_see_the_lean() {
+  TEST_ASSERT_TRUE(fabsf(rideCorner(false, 20) - 20.0f) > 10.0f);
+}
+
+// Straight, upright, braking at 0.25 G for four seconds with the GPS
+// speed arriving at 10 Hz: no stoppie must appear, and the deceleration
+// must be read as such.
+void test_ahrs_braking_is_not_a_stoppie() {
+  core::Ahrs ahrs;
+  const float dt = 0.005f, decel = -2.45f;
+  float gyro[3] = {0, 0, 0}, accel[3] = {decel, 0, 9.81f};
+  float worstPitch = 0, t = 0, v = 30.0f, gpsSpeed = v;
+  core::Attitude a = {};
+  for (int i = 0; i < 800; i++, t += dt) {   // first, upright at speed
+    float still[3] = {0, 0, 9.81f};
+    ahrs.setSpeed(v, 0);
+    a = ahrs.update(gyro, still, dt);
+  }
+  for (int i = 0; i < 800; i++, t += dt) {
+    v += decel * dt;
+    if (i % 20 == 0) gpsSpeed = v;            // 10 Hz
+    ahrs.setSpeed(gpsSpeed, t);
+    a = ahrs.update(gyro, accel, dt);
+    if (i > 100) worstPitch = fmaxf(worstPitch, fabsf(a.pitchDeg));
+  }
+  TEST_ASSERT_TRUE(worstPitch < 2.0f);
+  TEST_ASSERT_FLOAT_WITHIN(0.3f, decel, a.accelLong);
+}
+
+void test_axis_map_upside_down() {
+  // Breakout flipped over, X still forward: Y and Z point the other way.
+  core::AxisMap map = {1, -2, -3};
+  float chip[3] = {1, 2, -9.81f}, bike[3];
+  map.apply(chip, bike);
+  TEST_ASSERT_EQUAL_FLOAT(1, bike[0]);
+  TEST_ASSERT_EQUAL_FLOAT(-2, bike[1]);
+  TEST_ASSERT_EQUAL_FLOAT(9.81f, bike[2]);
+  TEST_ASSERT_TRUE(map.valid());
+  core::AxisMap twice = {1, 1, 3};
+  TEST_ASSERT_FALSE(twice.valid());
+}
+
+// ===========================================================================
+// Sensors read without a library
+// ===========================================================================
+
+void test_crc8_sensirion_example() {
+  const uint8_t word[2] = {0xBE, 0xEF};   // the datasheets' own example
+  TEST_ASSERT_EQUAL_HEX8(0x92, core::crc8(word, 2));
+}
+
+void test_crc16_modbus_check_value() {
+  const uint8_t text[] = "123456789";
+  TEST_ASSERT_EQUAL_HEX16(0x4B37, core::crc16Modbus(text, 9));
+}
+
+void test_sensor_conversions() {
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 25.0f, core::sensirionTemperature(26214));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 50.0f, core::sht3xHumidity(32768));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 56.5f, core::sht4xHumidity(32768));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 100.0f, core::sht4xHumidity(65535));  // clamped
+  TEST_ASSERT_FLOAT_WITHIN(0.02f, 25.0f, core::si7021Temperature(26797));
+  TEST_ASSERT_FLOAT_WITHIN(0.02f, 50.0f, core::si7021Humidity(29360));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 25.0f, core::hdc1080Temperature(25817));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 50.0f, core::hdc1080Humidity(32768));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 25.0f, core::htu31Temperature(25817));
+}
+
+void test_aht_decode() {
+  // 50 % = 0x80000, 25 degrees = 0x60000 (20 bits each, packed)
+  const uint8_t frame[6] = {0x1C, 0x80, 0x00, 0x06, 0x00, 0x00};
+  float t, h;
+  TEST_ASSERT_TRUE(core::ahtDecode(frame, t, h));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 50.0f, h);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 25.0f, t);
+  const uint8_t busy[6] = {0x9C, 0, 0, 0, 0, 0};
+  TEST_ASSERT_FALSE(core::ahtDecode(busy, t, h));
+}
+
+void test_am2320_decode() {
+  uint8_t frame[8] = {0x03, 0x04, 0x01, 0xF4, 0x80, 0x65, 0, 0};   // 50.0 %, -10.1 degrees
+  uint16_t crc = core::crc16Modbus(frame, 6);
+  frame[6] = crc & 0xFF;
+  frame[7] = crc >> 8;
+  float t, h;
+  TEST_ASSERT_TRUE(core::am2320Decode(frame, t, h));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 50.0f, h);
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, -10.1f, t);
+  frame[3] ^= 1;  // a flipped bit must not pass
+  TEST_ASSERT_FALSE(core::am2320Decode(frame, t, h));
+}
+
+void test_bme280_temperature_datasheet_example() {
+  // Bosch's worked example: T1=27504, T2=26435, T3=-1000, adc_T=519888
+  // -> t_fine = 128422, T = 25.08 degrees.
+  core::Bme280Calibration c = {};
+  c.T1 = 27504; c.T2 = 26435; c.T3 = -1000;
+  int32_t tFine;
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 25.08f, core::bme280Temperature(c, 519888, tFine));
+  TEST_ASSERT_EQUAL_INT32(128422, tFine);
+}
+
+// ===========================================================================
+// GPS commands
+// ===========================================================================
+
+void test_nmea_sentence_checksums() {
+  char out[48];
+  TEST_ASSERT_EQUAL(16, core::nmeaSentence("PCAS02,100", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("$PCAS02,100*1E\r\n", out);
+  core::nmeaSentence("PAIR050,100", out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("$PAIR050,100*22\r\n", out);
+  TEST_ASSERT_EQUAL(0, core::nmeaSentence("PCAS02,100", out, 8));   // does not fit
+}
+
+void test_ubx_frame_cfg_rate() {
+  // UBX-CFG-RATE, 200 ms, 1 cycle, GPS time: the classic 5 Hz command
+  const uint8_t payload[6] = {0xC8, 0x00, 0x01, 0x00, 0x01, 0x00};
+  const uint8_t expected[14] = {0xB5, 0x62, 0x06, 0x08, 0x06, 0x00, 0xC8,
+                                0x00, 0x01, 0x00, 0x01, 0x00, 0xDE, 0x6A};
+  uint8_t frame[32];
+  TEST_ASSERT_EQUAL(14, core::ubxFrame(0x06, 0x08, payload, 6, frame, sizeof(frame)));
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(expected, frame, 14);
+}
 
 void setUp() {}
 void tearDown() {}
@@ -732,6 +920,22 @@ int main(int, char **) {
   RUN_TEST(test_settings_are_forced_into_their_limits);
   RUN_TEST(test_settings_wifi_credentials);
   RUN_TEST(test_settings_generated_password_is_usable);
+
+  RUN_TEST(test_ahrs_still_and_level);
+  RUN_TEST(test_ahrs_steady_corner_reads_the_lean);
+  RUN_TEST(test_ahrs_steady_corner_without_speed_cannot_see_the_lean);
+  RUN_TEST(test_ahrs_braking_is_not_a_stoppie);
+  RUN_TEST(test_axis_map_upside_down);
+
+  RUN_TEST(test_crc8_sensirion_example);
+  RUN_TEST(test_crc16_modbus_check_value);
+  RUN_TEST(test_sensor_conversions);
+  RUN_TEST(test_aht_decode);
+  RUN_TEST(test_am2320_decode);
+  RUN_TEST(test_bme280_temperature_datasheet_example);
+
+  RUN_TEST(test_nmea_sentence_checksums);
+  RUN_TEST(test_ubx_frame_cfg_rate);
 
   return UNITY_END();
 }

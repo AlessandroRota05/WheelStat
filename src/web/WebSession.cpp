@@ -1,4 +1,5 @@
-// WheelStat - the session viewer: map and charts of one recorded session.
+// WheelStat - the session viewer: map and charts of one recorded session,
+// its lap table with the ideal lap, and two laps overlaid.
 //
 // The device only sends the log as it is on flash (/session/data); decoding
 // and drawing happen in the phone's browser, which has far more memory and
@@ -21,25 +22,30 @@ static const char SESSION_BODY[] PROGMEM = R"html(
 <h2 id='title'></h2>
 <div class='card' id='info'></div>
 <div class='caption'><span id='lRange'></span><select id='range' onchange='pick()'></select></div>
+<div class='caption' id='cmpRow' hidden><span id='lCmp'></span><select id='cmp' onchange='pick()'></select></div>
 <canvas id='map' height='240'></canvas>
 <div class='card' id='read'></div>
-<div class='caption'><span id='lSpeed'></span></div>
+<div id='deltaBox' hidden><div class='caption'><span id='lDelta'></span></div>
+<canvas class='scrub' id='cDelta' height='110'></canvas></div>
+<div class='caption'><span id='lSpeed'></span><span class='legend'></span></div>
 <canvas class='scrub' id='cSpeed' height='110'></canvas>
-<div class='caption'><span id='lLean'></span></div>
+<div class='caption'><span id='lLean'></span><span class='legend'></span></div>
 <canvas class='scrub' id='cLean' height='110'></canvas>
-<div class='caption'><span id='lPitch'></span></div>
+<div class='caption'><span id='lPitch'></span><span class='legend'></span></div>
 <canvas class='scrub' id='cPitch' height='110'></canvas>
-<div class='caption'><span id='lG'></span><span><span style='color:var(--accent)' id='lGlat'></span>
- / <span style='color:var(--warn)' id='lGlon'></span></span></div>
+<div class='caption'><span id='lG'></span><span class='legend' id='gLegend'></span></div>
 <canvas class='scrub' id='cG' height='110'></canvas>
 <div id='lapBox'></div>
 )html";
 
 static const char SESSION_SCRIPT[] PROGMEM = R"js(
 // S: the decoded session. i0..i1: the samples on screen (everything, or one
-// lap). cur: the sample under the finger, -1 if none.
-var S=null,i0=0,i1=0,cur=-1;
+// lap). cur: the position under the finger, -1 if none - a sample index, or
+// a point of the overlay when two laps are compared. C: the overlay, null
+// when there is none.
+var S=null,i0=0,i1=0,cur=-1,C=null;
 var file=new URLSearchParams(location.search).get('f')||'';
+var BLUE='#4cc9ff',YELLOW='#ffd166',PURPLE='#c792ea';
 
 function byId(id){return document.getElementById(id);}
 
@@ -52,6 +58,7 @@ function fmtClock(s){
  var m=Math.floor(s/60);s-=m*60;
  return m+':'+(s<10?'0':'')+s.toFixed(1);
 }
+function fmtGap(ms){return (ms>0?'+':'')+(ms/1000).toFixed(2);}
 
 // --- Decoding ----------------------------------------------------------------
 // Offsets are those of SessionHeader, SessionSample and SessionFooter in
@@ -137,6 +144,8 @@ function show(){
   [T.maxSpeed,maxSpeed.toFixed(0)+' km/h'],
   [T.maxLean,maxR.toFixed(0)+'&deg; '+T.right+' / '+maxL.toFixed(0)+'&deg; '+T.left]];
  if(S.best>=0&&S.laps[S.best])facts.push([T.best,fmtLap(S.laps[S.best].ms)]);
+ var ideal=idealLap();
+ if(ideal)facts.push([T.ideal,fmtLap(ideal.ms)]);
  var h='<div class="pairs">';
  for(i=0;i<facts.length;i++)h+='<div>'+facts[i][0]+'<b>'+facts[i][1]+'</b></div>';
  h+='</div>';
@@ -144,54 +153,182 @@ function show(){
  byId('info').innerHTML=h;
 
  var options='<option value="0">'+T.all+'</option>';
- for(l in S.range){
-  var done=S.laps[l-1];
-  options+='<option value="'+l+'">'+T.lap+' '+l+(done?' — '+fmtLap(done.ms):'')+'</option>';
- }
+ for(l in S.range)options+='<option value="'+l+'">'+lapName(l)+'</option>';
  byId('range').innerHTML=options;
 
- if(S.laps.length){
-  var t='<h2>'+T.laps+'</h2><div class="card"><table>';
-  for(l=0;l<S.laps.length;l++){
-   t+='<tr><td>'+(l+1)+'</td><td class="num'+(l==S.best?' win':'')+'">'+fmtLap(S.laps[l].ms)+'</td>';
-   if(S.laps[l].sec.length>1)
-    for(i=0;i<S.laps[l].sec.length;i++)t+='<td class="num dim">'+fmtLap(S.laps[l].sec[i])+'</td>';
-   t+='</tr>';
-  }
-  byId('lapBox').innerHTML=t+'</table></div>';
- }
-
+ byId('lapBox').innerHTML=lapTable(ideal);
  byId('lRange').textContent=T.range;
+ byId('lCmp').textContent=T.compare;
  byId('lSpeed').textContent=T.speed;
  byId('lLean').textContent=T.lean+' (+ '+T.right+')';
  byId('lPitch').textContent=T.pitch;
  byId('lG').textContent=T.g;
- byId('lGlat').textContent=T.glat;
- byId('lGlon').textContent=T.glon;
+
+ // ?lap=4&vs=2 in the address opens that lap compared with that one: a
+ // comparison can be bookmarked and opened again after the next session.
+ var q=new URLSearchParams(location.search),la=q.get('lap'),vs=q.get('vs');
+ if(la&&S.range[la]){
+  byId('range').value=la;
+  pick();
+  if(vs&&S.range[vs]&&vs!=la)byId('cmp').value=vs;
+ }
  pick();
 }
 
+function lapName(l){
+ var done=S.laps[l-1];
+ return T.lap+' '+l+(done?' — '+fmtLap(done.ms):'');
+}
+
+// The best time of each sector, wherever it was ridden, and their sum: what
+// the session would have given with every sector at its best. Only with
+// checkpoints - with one sector it would be the best lap again.
+function idealLap(){
+ if(S.sectors<2||!S.laps.length)return null;
+ var best=[],ms=0;
+ for(var c=0;c<S.sectors;c++){
+  var b=0;
+  for(var l=0;l<S.laps.length;l++){var t=S.laps[l].sec[c];if(t&&(!b||t<b))b=t;}
+  if(!b)return null;
+  best.push(b);ms+=b;
+ }
+ return {sec:best,ms:ms};
+}
+
+// Lap times with the gap to the best lap, sector times with the best of
+// each column in green, and the ideal lap at the bottom.
+function lapTable(ideal){
+ if(!S.laps.length)return '';
+ var best=S.best>=0?S.laps[S.best].ms:0,sectors=S.sectors>1,t,l,c;
+ t='<h2>'+T.laps+'</h2><div class="card"><table><tr><td class="dim">#</td>'
+  +'<td class="dim num">'+T.time+'</td><td class="dim num">'+T.gap+'</td>';
+ if(sectors)for(c=0;c<S.sectors;c++)t+='<td class="dim num">S'+(c+1)+'</td>';
+ t+='</tr>';
+ for(l=0;l<S.laps.length;l++){
+  var lap=S.laps[l];
+  t+='<tr><td>'+(l+1)+'</td><td class="num'+(l==S.best?' win':'')+'">'+fmtLap(lap.ms)+'</td>'
+   +'<td class="num dim">'+(l==S.best||!best?'':fmtGap(lap.ms-best))+'</td>';
+  if(sectors)for(c=0;c<S.sectors;c++){
+   var top=ideal&&lap.sec[c]==ideal.sec[c];
+   t+='<td class="num'+(top?' win':' dim')+'">'+(lap.sec[c]?fmtLap(lap.sec[c]):'--')+'</td>';
+  }
+  t+='</tr>';
+ }
+ if(ideal){
+  t+='<tr class="total"><td></td><td class="num">'+fmtLap(ideal.ms)+'</td>'
+   +'<td class="num dim">'+T.ideal+'</td>';
+  for(c=0;c<S.sectors;c++)t+='<td class="num">'+fmtLap(ideal.sec[c])+'</td>';
+  t+='</tr>';
+ }
+ return t+'</table></div>';
+}
+
 function pick(){
- var l=+byId('range').value;
+ var l=+byId('range').value,cmp=byId('cmp'),row=byId('cmpRow');
  if(l&&S.range[l]){i0=S.range[l][0];i1=S.range[l][1];}
  else{i0=0;i1=S.n;}
+
+ // The second lap can be chosen only once a first one is: the list holds
+ // the other laps, and is rebuilt only when the first lap changes.
+ if(l&&Object.keys(S.range).length>1){
+  if(row.hidden||cmp.dataset.for!=l){
+   var o='<option value="0">—</option>';
+   for(var k in S.range)if(k!=l)o+='<option value="'+k+'">'+lapName(k)+'</option>';
+   cmp.innerHTML=o;cmp.dataset.for=l;
+  }
+  row.hidden=false;
+ }else{row.hidden=true;cmp.value='0';}
+
+ C=(!row.hidden&&+cmp.value)?overlay(l,+cmp.value):null;
+ byId('deltaBox').hidden=!C;
+ if(C)byId('lDelta').textContent=T.deltaOf+' '+l+' '+T.deltaOn+' '+(+cmp.value)+' (s)';
+
+ var leg=C?'<span style="color:'+BLUE+'">'+T.lap+' '+l+'</span> / <span style="color:'+PURPLE+'">'
+   +T.lap+' '+(+cmp.value)+'</span>':'';
+ document.querySelectorAll('.legend').forEach(function(e){e.innerHTML=leg;});
+ // Overlaid, the G chart shows the lateral G of both laps: four lines
+ // would not read.
+ if(!C)byId('gLegend').innerHTML='<span style="color:'+BLUE+'">'+T.glat+'</span> / <span style="color:'
+   +YELLOW+'">'+T.glon+'</span>';
+ byId('lG').textContent=C?T.g+' ('+T.glat+')':T.g;
+
  cur=-1;
  layer={};
  draw();
 }
 
+// --- Two laps overlaid ---------------------------------------------------------
+// Two laps never have the same number of samples, nor the same line: they
+// are compared at the same POINT of the track. Each lap is measured along
+// its own path and cut into N equal fractions of its length; at each
+// fraction both laps are interpolated, so speed, lean and time line up
+// where the bike was in the same place. The time gap at each point says
+// where one lap gains or loses on the other.
+var N=300;
+function resample(l){
+ var a=S.range[l][0],b=S.range[l][1],n=b-a,i,k;
+ if(n<4)return null;
+ var dist=new Float32Array(n),total=0;
+ for(i=1;i<n;i++){
+  var p=a+i,q=p-1;
+  if(S.fix[p]&&S.fix[q])total+=Math.hypot(S.x[p]-S.x[q],S.y[p]-S.y[q]);
+  dist[i]=total;
+ }
+ if(total<50)return null;                 // no usable GPS in this lap
+
+ // The samples are 1/rate apart; the lap time from the summary, when there
+ // is one, stretches them to the exact length of the lap.
+ var done=S.laps[l-1],scale=done?done.ms/1000/((n-1)/S.rate):1;
+ var keys=['speed','lean','pitch','glat','x','y'],r={t:new Float32Array(N),idx:new Int32Array(N)};
+ keys.forEach(function(key){r[key]=new Float32Array(N);});
+ for(k=0,i=0;k<N;k++){
+  var d=total*k/(N-1);
+  while(i<n-2&&dist[i+1]<d)i++;
+  var span=dist[i+1]-dist[i],f=span>0?Math.min(1,Math.max(0,(d-dist[i])/span)):0;
+  keys.forEach(function(key){var s=S[key];r[key][k]=s[a+i]+(s[a+i+1]-s[a+i])*f;});
+  r.t[k]=(i+f)/S.rate*scale;
+  r.idx[k]=a+i;
+ }
+ return r;
+}
+
+function overlay(la,lb){
+ var A=resample(la),B=resample(lb);
+ if(!A||!B)return null;
+ var delta=new Float32Array(N);
+ for(var k=0;k<N;k++)delta[k]=A.t[k]-B.t[k];
+ return {A:A,B:B,delta:delta};
+}
+
+// --- Drawing -----------------------------------------------------------------
 function draw(){
  drawMap();
- plot('cSpeed',[S.speed],['#4cc9ff'],false);
- plot('cLean',[S.lean],['#4cc9ff'],true);
- plot('cPitch',[S.pitch],['#ffd166'],true);
- plot('cG',[S.glat,S.glon],['#4cc9ff','#ffd166'],true);
+ if(C){
+  var c=cur>=0?cur:-1;
+  plot('cDelta',[C.delta],['#e9edf3'],true,0,N,c);
+  plot('cSpeed',[C.A.speed,C.B.speed],[BLUE,PURPLE],false,0,N,c);
+  plot('cLean',[C.A.lean,C.B.lean],[BLUE,PURPLE],true,0,N,c);
+  plot('cPitch',[C.A.pitch,C.B.pitch],[BLUE,PURPLE],true,0,N,c);
+  plot('cG',[C.A.glat,C.B.glat],[BLUE,PURPLE],true,0,N,c);
+ }else{
+  plot('cSpeed',[S.speed],[BLUE],false,i0,i1,cur);
+  plot('cLean',[S.lean],[BLUE],true,i0,i1,cur);
+  plot('cPitch',[S.pitch],[YELLOW],true,i0,i1,cur);
+  plot('cG',[S.glat,S.glon],[BLUE,YELLOW],true,i0,i1,cur);
+ }
  readout();
 }
 
 function readout(){
  var e=byId('read');
  if(cur<0){e.innerHTML='<span class="dim">'+T.hint+'</span>';return;}
+ if(C){
+  var d=C.delta[cur];
+  e.innerHTML=Math.round(cur*100/(N-1))+'% · <span style="color:'+BLUE+'">'+C.A.speed[cur].toFixed(0)
+   +'</span> / <span style="color:'+PURPLE+'">'+C.B.speed[cur].toFixed(0)+'</span> km/h · '
+   +T.gap+' <b style="color:var('+(d>0?'--danger':'--good')+')">'+(d>0?'+':'')+d.toFixed(2)+' s</b>';
+  return;
+ }
  var l=S.lean[cur];
  e.innerHTML=fmtClock((cur-i0)/S.rate)+' · <b>'+S.speed[cur].toFixed(0)+' km/h</b> · '
   +T.leanShort+' <b>'+Math.abs(l).toFixed(1)+'&deg;</b> '+(l<0?T.left:T.right)
@@ -199,7 +336,6 @@ function readout(){
   +(S.lap[cur]?' · '+T.lap+' '+S.lap[cur]:'');
 }
 
-// --- Drawing -----------------------------------------------------------------
 // A long session is tens of thousands of samples: too many to redraw at
 // every move of the finger. Each canvas keeps its curves in an off-screen
 // copy, painted once per selection (and again if the width changes); a move
@@ -229,16 +365,16 @@ function layered(id,paint){
  return c;
 }
 
-// One or two series on a canvas. Each pixel column shows the value of
+// Series over [a,b) on a canvas. Each pixel column shows the value of
 // largest magnitude that falls in it, so squeezing an hour into a phone
-// screen does not flatten the peaks. The scale adapts to the selection.
-function plot(id,series,colors,signed){
- var n=i1-i0;
+// screen does not flatten the peaks. The scale adapts to what is shown.
+function plot(id,series,colors,signed,a,b,at){
+ var n=b-a;
  var c=layered(id,function(c,W,H){
   if(n<2)return;
   var max=0,k,i,x;
   for(k=0;k<series.length;k++)
-   for(i=i0;i<i1;i++)max=Math.max(max,Math.abs(series[k][i]));
+   for(i=a;i<b;i++)max=Math.max(max,Math.abs(series[k][i]));
   max=max||1;
   var base=signed?H/2:H-4,span=signed?H/2-6:H-20;
   c.strokeStyle='#2a3140';c.lineWidth=1;
@@ -247,8 +383,8 @@ function plot(id,series,colors,signed){
    var s=series[k];
    c.strokeStyle=colors[k];c.lineWidth=1.5;c.beginPath();
    for(x=0;x<W;x++){
-    var a=i0+Math.floor(x*n/W),b=i0+Math.floor((x+1)*n/W),val=s[a];
-    for(i=a+1;i<b;i++)if(Math.abs(s[i])>Math.abs(val))val=s[i];
+    var p=a+Math.floor(x*n/W),q=a+Math.floor((x+1)*n/W),val=s[p];
+    for(i=p+1;i<q;i++)if(Math.abs(s[i])>Math.abs(val))val=s[i];
     var y=base-val/max*span;
     if(x)c.lineTo(x,y);else c.moveTo(x,y);
    }
@@ -257,8 +393,8 @@ function plot(id,series,colors,signed){
   c.fillStyle='#8b93a4';c.font='11px sans-serif';
   c.fillText((signed?'±':'')+max.toFixed(max<10?2:0),4,12);
  });
- if(c&&cur>=i0&&cur<i1){
-  var cv=byId(id),cx=(cur-i0+.5)*cv.clientWidth/n;
+ if(c&&at>=a&&at<b){
+  var cv=byId(id),cx=(at-a+.5)*cv.clientWidth/n;
   c.strokeStyle='#fff';c.lineWidth=1;
   c.beginPath();c.moveTo(cx,0);c.lineTo(cx,+cv.dataset.h);c.stroke();
  }
@@ -271,10 +407,10 @@ function leanColor(lean){
  return'#ff5d6c';
 }
 
-// M: how metres become pixels on the map, kept for the cursor dot
+// M: how metres become pixels on the map, kept for the cursor dots
 var M=null;
-function mx(i){return M.ox+S.x[i]*M.sc;}
-function my(i){return M.oy-S.y[i]*M.sc;}   // Y flipped: north up
+function px(x){return M.ox+x*M.sc;}
+function py(y){return M.oy-y*M.sc;}   // Y flipped: north up
 
 function drawMap(){
  var c=layered('map',function(c,W,H){
@@ -284,6 +420,10 @@ function drawMap(){
    any++;
    minX=Math.min(minX,S.x[i]);maxX=Math.max(maxX,S.x[i]);
    minY=Math.min(minY,S.y[i]);maxY=Math.max(maxY,S.y[i]);
+  }
+  if(C)for(i=0;i<N;i++){
+   minX=Math.min(minX,C.B.x[i]);maxX=Math.max(maxX,C.B.x[i]);
+   minY=Math.min(minY,C.B.y[i]);maxY=Math.max(maxY,C.B.y[i]);
   }
   if(any<2){
    c.fillStyle='#8b93a4';c.font='13px sans-serif';
@@ -295,31 +435,40 @@ function drawMap(){
   var sc=Math.min((W-2*pad)/Math.max(1,maxX-minX),(H-2*pad)/Math.max(1,maxY-minY));
   M={sc:sc,ox:(W-(maxX-minX)*sc)/2-minX*sc,oy:(H+(maxY-minY)*sc)/2+minY*sc};
 
+  // The lap compared against, thin and underneath
+  c.lineCap='round';
+  if(C){
+   c.strokeStyle=PURPLE;c.lineWidth=1.5;c.globalAlpha=.8;c.beginPath();
+   for(i=0;i<N;i++){if(i)c.lineTo(px(C.B.x[i]),py(C.B.y[i]));else c.moveTo(px(C.B.x[i]),py(C.B.y[i]));}
+   c.stroke();c.globalAlpha=1;
+  }
+
   var prev=-1;
-  c.lineWidth=3;c.lineCap='round';
+  c.lineWidth=3;
   for(i=i0;i<i1;i++){
    if(!S.fix[i]){prev=-1;continue;}    // no line across a GPS dropout
    if(prev>=0){
     c.strokeStyle=leanColor(Math.abs(S.lean[i]));
-    c.beginPath();c.moveTo(mx(prev),my(prev));c.lineTo(mx(i),my(i));c.stroke();
+    c.beginPath();c.moveTo(px(S.x[prev]),py(S.y[prev]));c.lineTo(px(S.x[i]),py(S.y[i]));c.stroke();
    }
    prev=i;
   }
  });
- if(c&&M&&cur>=i0&&cur<i1&&S.fix[cur]){
-  c.fillStyle='#fff';
-  c.beginPath();c.arc(mx(cur),my(cur),5,0,7);c.fill();
- }
+ if(!c||!M||cur<0)return;
+ function dot(x,y,col){c.fillStyle=col;c.beginPath();c.arc(px(x),py(y),5,0,7);c.fill();}
+ if(C){dot(C.B.x[cur],C.B.y[cur],PURPLE);dot(C.A.x[cur],C.A.y[cur],'#fff');}
+ else if(cur>=i0&&cur<i1&&S.fix[cur])dot(S.x[cur],S.y[cur],'#fff');
 }
 
 // --- Reading the charts ------------------------------------------------------
 function scrub(ev){
- var r=ev.currentTarget.getBoundingClientRect(),n=i1-i0;
- if(!S||n<1)return;
- cur=i0+Math.max(0,Math.min(n-1,Math.floor((ev.clientX-r.left)/r.width*n)));
+ if(!S)return;
+ var r=ev.currentTarget.getBoundingClientRect(),a=C?0:i0,n=C?N:i1-i0;
+ if(n<1)return;
+ cur=a+Math.max(0,Math.min(n-1,Math.floor((ev.clientX-r.left)/r.width*n)));
  draw();
 }
-['cSpeed','cLean','cPitch','cG'].forEach(function(id){
+['cDelta','cSpeed','cLean','cPitch','cG'].forEach(function(id){
  var cv=byId(id);
  cv.addEventListener('pointerdown',scrub);
  // A mouse scrubs only while pressed; a finger is always "pressed"
@@ -327,7 +476,7 @@ function scrub(ev){
 });
 window.addEventListener('resize',function(){if(S)draw();});
 
-byId('info').textContent=T.loading;
+byId('info').innerHTML='<span class="spin"></span>'+T.loading;
 fetch('/session/data?f='+encodeURIComponent(file))
  .then(function(r){if(!r.ok)throw new Error(r.status);return r.arrayBuffer();})
  .then(function(b){

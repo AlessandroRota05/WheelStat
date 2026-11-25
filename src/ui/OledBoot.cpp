@@ -129,11 +129,16 @@ void checklistPending(int row, const char *label, const char *driverName) {
 }
 
 // A tick or a cross drawn with segments instead of "OK"/"--": readable out
-// of the corner of the eye and narrower.
-void checklistResult(int row, bool ok) {
+// of the corner of the eye and narrower. The name is written again: most
+// components are recognised during the check, so only now is it known.
+void checklistResult(int row, bool ok, const char *driverName) {
   if (!panelOk) return;
   int y = CHECK_FIRST_ROW_Y + row * CHECK_ROW_STEP;
   int x = CHECK_RESULT_X + 6;
+
+  display.fillRect(CHECK_NAME_X, y, CHECK_RESULT_X - CHECK_NAME_X, 8, COLOR_OFF);
+  display.setCursor(CHECK_NAME_X, y);
+  display.print(driverName);
 
   clearResultCell(y);
   if (ok) {

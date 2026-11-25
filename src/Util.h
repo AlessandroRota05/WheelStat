@@ -21,6 +21,16 @@ inline float wrapAngle180(float degrees) {
   return degrees;
 }
 
+// A size in the unit that keeps it short: "1184 KB", "245 MB", "29.8 GB".
+// The internal flash is counted in KB, a microSD in GB.
+inline void formatSize(uint64_t bytes, char *out, size_t size) {
+  const uint64_t KB = 1024, MB = KB * 1024, GB = MB * 1024;
+  if (bytes >= 10 * GB)     snprintf(out, size, "%lu GB", (unsigned long)(bytes / GB));
+  else if (bytes >= GB)     snprintf(out, size, "%.1f GB", bytes / (double)GB);
+  else if (bytes >= 10 * MB) snprintf(out, size, "%lu MB", (unsigned long)(bytes / MB));
+  else                      snprintf(out, size, "%lu KB", (unsigned long)(bytes / KB));
+}
+
 // "m:ss.d". No hours: a lap that long is off the scale for any circuit.
 // Shared by the OLED and the website so the format is defined once.
 inline void formatLapTime(uint32_t ms, char *out, size_t size) {

@@ -43,9 +43,9 @@ static float lastPeaks[CHANNEL_COUNT] = {};
 static bool sessionIdTaken(int id) {
   char path[sizeof(logPath)];
   snprintf(path, sizeof(path), LOG_PATTERN, id);
-  if (LittleFS.exists(path)) return true;
+  if (storage::sessions().exists(path)) return true;
   snprintf(path, sizeof(path), LEGACY_LOG_PATTERN, id);
-  return LittleFS.exists(path);
+  return storage::sessions().exists(path);
 }
 
 // The file stays open for the whole recording and is synced here: if power
@@ -121,11 +121,11 @@ static void writeFooter() {
 
 bool start() {
   if (!storage::ensureMounted()) {
-    Serial.println(F("ERROR: flash storage not available."));
+    Serial.println(F("ERROR: storage not available."));
     return false;
   }
 
-  size_t freeBytes = storage::freeBytes();
+  uint64_t freeBytes = storage::freeBytes();
   if (freeBytes < MIN_FREE_BYTES) {
     Serial.println(F("ERROR: storage almost full. Delete old logs from the website."));
     return false;
@@ -143,7 +143,7 @@ bool start() {
   }
   snprintf(logPath, sizeof(logPath), LOG_PATTERN, sessionId);
 
-  logFile = LittleFS.open(logPath, FILE_WRITE);
+  logFile = storage::sessions().open(logPath, FILE_WRITE);
   if (!logFile) {
     Serial.println(F("ERROR: could not create the log file."));
     return false;
@@ -166,7 +166,7 @@ bool start() {
 
   if (logFile.write((const uint8_t *)&header, sizeof(header)) != sizeof(header)) {
     logFile.close();
-    LittleFS.remove(logPath);
+    storage::sessions().remove(logPath);
     Serial.println(F("ERROR: could not write the log header."));
     return false;
   }
